@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}{{ action }}项目{% endblock %}
+
+{% block content %}
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="brand">需求对话台</div>
+
+        <div style="margin-top: 12px;" class="panel">
+            <div class="meta" style="margin-top: 0;">当前用户：{{ request.user.username }}</div>
+            <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
+                <a class="chip" href="{% url 'project_list' %}">返回项目列表</a>
+            </div>
+            <form action="{% url 'logout' %}" method="post" style="margin-top: 12px;">
+                {% csrf_token %}
+                <button type="submit" class="ghost-btn">退出登录</button>
+            </form>
+        </div>
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <span class="chip">{{ action }}项目</span>
+        </div>
+
+        <section class="conversation">
+            <div class="chat-track">
+                <div class="panel" style="max-width: 600px;">
+                    <h2 style="margin-top: 0;">{{ action }}项目</h2>
+
+                    <form method="post" style="margin-top: 20px;">
+                        {% csrf_token %}
+
+                        <div style="margin-bottom: 16px;">
+                            <label for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>
+                            {{ form.name }}
+                            {% if form.name.errors %}
+                            <div style="color: #ff6b6b; font-size: 12px; margin-top: 4px;">{{ form.name.errors }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div style="margin-bottom: 16px;">
+                            <label for="{{ form.path.id_for_label }}">{{ form.path.label }} <span style="color: var(--muted); font-weight: normal;">(可选)</span></label>
+                            {{ form.path }}
+                            {% if form.path.errors %}
+                            <div style="color: #ff6b6b; font-size: 12px; margin-top: 4px;">{{ form.path.errors }}</div>
+                            {% endif %}
+                            <div class="meta" style="margin-top: 4px;">{{ form.path.help_text }}</div>
+                        </div>
+
+                        <div style="margin-bottom: 16px;">
+                            <label for="{{ form.description.id_for_label }}">{{ form.description.label }}</label>
+                            {{ form.description }}
+                            {% if form.description.errors %}
+                            <div style="color: #ff6b6b; font-size: 12px; margin-top: 4px;">{{ form.description.errors }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div style="margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
+                            {{ form.is_default }}
+                            <label for="{{ form.is_default.id_for_label }}" style="margin: 0;">{{ form.is_default.label }}</label>
+                            {% if form.is_default.errors %}
+                            <div style="color: #ff6b6b; font-size: 12px;">{{ form.is_default.errors }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div style="display: flex; gap: 12px;">
+                            <button type="submit">保存</button>
+                            <a href="{% url 'project_list' %}" class="ghost-btn" style="padding: 10px 14px; display: inline-block; text-decoration: none;">取消</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+{% endblock %}

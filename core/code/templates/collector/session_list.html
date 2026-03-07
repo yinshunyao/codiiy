@@ -1,0 +1,669 @@
+{% extends "base.html" %}
+
+{% block title %}会话列表{% endblock %}
+
+{% block content %}
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="brand">需求对话台</div>
+
+        <!-- 项目选择器 -->
+        <div class="panel" style="margin-bottom: 12px; padding: 10px 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span class="meta" style="margin: 0;">当前项目</span>
+                <a href="{% url 'project_list' %}" class="chip" style="padding: 4px 8px;">管理</a>
+            </div>
+            <select id="projectSelector" style="width: 100%; padding: 8px; font-size: 14px;"
+                    onchange="switchProject(this.value)">
+                {% for project in projects %}
+                <option value="{{ project.id }}" {% if current_project and current_project.id == project.id %}selected{% endif %}>
+                    {{ project.name }}{% if project.is_default %} (默认){% endif %}
+                </option>
+                {% endfor %}
+            </select>
+            <div class="meta" style="margin-top: 6px; font-size: 11px; word-break: break-all;">
+                需求文档: {{ current_project.or_path|truncatechars:35 }}
+            </div>
+        </div>
+
+        <a class="nav-action" href="{% url 'session_list' %}">+ 新对话</a>
+
+        <ul class="nav-list">
+            {% for session in sessions %}
+            <li>
+                <a
+                    href="{% url 'session_detail' session.id %}"
+                    class="{% if active_session and active_session.id == session.id %}active{% endif %}"
+                    title="{{ session.title }}"
+                >
+                    {{ session.title|truncatechars:24 }}
+                    <div class="meta">{{ session.updated_at|date:"m-d H:i" }}</div>
+                </a>
+                <form action="{% url 'session_delete' session.id %}" method="post" onsubmit="return confirm('确定要删除这个会话吗？');" style="display: inline;">
+                    {% csrf_token %}
+                    <button type="submit" class="delete-btn" title="删除会话">×</button>
+                </form>
+            </li>
+            {% empty %}
+            <li><div class="panel">暂无会话</div></li>
+            {% endfor %}
+        </ul>
+
+        <div style="margin-top: 12px;" class="panel">
+            <div class="meta" style="margin-top: 0;">当前用户：{{ request.user.username }}</div>
+            <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
+                <a class="chip" href="{% url 'password_change' %}">修改密码</a>
+                <a class="chip" href="/admin/">管理后台</a>
+            </div>
+            <form action="{% url 'logout' %}" method="post" style="margin-top: 12px;">
+                {% csrf_token %}
+                <button type="submit" class="ghost-btn">退出登录</button>
+            </form>
+        </div>
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <div class="custom-dropdown" id="llmDropdown" data-project-id="{{ current_project.id }}" data-csrf-token="{{ csrf_token }}">
+                    <button type="button" class="chip llm-chip-btn" id="llmDropdownToggle" style="padding: 4px 8px;">
+                        {{ current_llm_name }}
+                    </button>
+                    <div class="dropdown-menu" id="llmDropdownMenu">
+                        <!-- 动态填充 -->
+                    </div>
+                </div>
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'requirement_file_list' %}">原始需求列表</a>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+                {% if active_session %}
+                <span class="chip">会话 #{{ active_session.id }}</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <section class="conversation" id="conversationBox" data-has-active-session="{% if active_session %}1{% else %}0{% endif %}">
+            <div class="chat-track">
+                {% if active_session %}
+                <div class="panel" style="margin-bottom: 2px;">
+                    <strong>{{ active_session.title }}</strong>
+                    <div class="meta">创建时间：{{ active_session.created_at|date:"Y-m-d H:i" }}</div>
+                </div>
+                {% for message in messages %}
+                <div class="message-row {% if message.role == 'user' %}user{% else %}assistant{% endif %}">
+                    <div class="bubble {% if message.role == 'user' %}bubble-user{% else %}bubble-assistant{% endif %}">
+                        <div class="meta" style="margin-top: 0;">
+                            {% if message.role == "user" %}你{% else %}{{ current_llm_name|default:"助手" }}{% endif %} · {{ message.created_at|date:"H:i:s" }}
+                        </div>
+                        <div class="message-text">
+                            {% if message.attachment %}
+                                {% if message.is_audio_attachment %}
+                                <div class="voice-record-block">
+                                    <audio controls preload="none" src="{{ message.attachment.url }}"></audio>
+                                </div>
+                                {% else %}
+                                <div style="margin-bottom: 6px;"><a href="{{ message.attachment.url }}" target="_blank" class="chip">{{ message.attachment.name }}</a></div>
+                                {% endif %}
+                            {% endif %}
+
+                            {% if message.content %}
+                                {% if message.is_audio_attachment %}
+                                <div class="voice-transcript-wrap">
+                                    <button type="button" class="chip llm-chip-btn transcript-toggle-btn" data-target-id="transcript-{{ message.id }}">展开文字</button>
+                                    <div class="voice-transcript-text is-collapsed" id="transcript-{{ message.id }}">{{ message.content|linebreaksbr }}</div>
+                                </div>
+                                {% else %}{{ message.content|linebreaksbr }}{% endif %}
+                            {% endif %}
+                        </div>
+                        {% if message.role == "user" and active_session %}
+                        <form method="post" action="{% url 'session_rollback' active_session.id message.id %}" style="margin-top: 8px;">
+                            {% csrf_token %}
+                            <button
+                                type="submit"
+                                class="chip llm-chip-btn icon-btn"
+                                title="回退到这里"
+                                aria-label="回退到这里"
+                            >&#8630;</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+                {% else %}
+                <div class="panel">
+                    <h2 style="margin-top: 0;">开始一条新的对话</h2>
+                    <p style="color: var(--muted); margin-bottom: 0;">
+                        当前项目：<strong>{{ current_project.name }}</strong><br>
+                        需求文档将保存到：{{ current_project.or_path }}
+                    </p>
+                </div>
+                {% endif %}
+            </div>
+        </section>
+
+        <section class="composer">
+            <form method="post" class="composer-form" action="{% if active_session %}{% url 'session_send' active_session.id %}{% else %}{% url 'session_create' %}{% endif %}" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="chat-input-shell">
+                    <button type="button" id="attachmentTrigger" class="input-icon-btn plus-btn" title="上传附件" aria-label="上传附件">+</button>
+                    <div class="chat-input-main">
+                        {{ message_form.content.as_widget }}
+                    </div>
+                    <button type="button" id="speechRecognizeBtn" class="input-icon-btn mic-btn" title="语音识别" aria-label="语音识别">
+                        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" fill="currentColor"/>
+                            <path d="M19 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.93V21H9a1 1 0 0 0 0 2h6a1 1 0 0 0 0-2h-2v-3.07A7 7 0 0 0 19 11Z" fill="currentColor"/>
+                        </svg>
+                    </button>
+                    <button type="button" id="voiceRecordToggle" class="voice-orb-btn" title="录音" aria-label="录音">
+                        <span class="voice-bar"></span>
+                        <span class="voice-bar"></span>
+                        <span class="voice-bar"></span>
+                    </button>
+                </div>
+                <input type="file" id="id_attachment" name="attachment" style="display: none;">
+                <div id="selectedAttachmentInfo" class="meta composer-attachment-info"></div>
+                <div id="voiceRecordStatus" class="meta composer-status">未开始语音输入</div>
+                {% if rollback_draft and rollback_draft.attachment_path %}
+                <div class="meta" style="margin-top: 6px;">
+                    回退附件：<span class="chip" style="padding: 2px 8px;">{{ rollback_draft.attachment_name }}</span>
+                    <span style="margin-left: 8px;">发送时将自动带上该附件（可手动重新选择覆盖）</span>
+                </div>
+                {% endif %}
+                <button type="submit" class="composer-submit-btn">{% if active_session %}发送{% else %}发送并创建会话{% endif %}</button>
+            </form>
+        </section>
+    </main>
+</div>
+<script>
+    (function () {
+        const conversationBox = document.getElementById("conversationBox");
+        if (!conversationBox) {
+            return;
+        }
+
+        if (conversationBox.dataset.hasActiveSession !== "1") {
+            return;
+        }
+
+        const scrollToLatest = () => {
+            conversationBox.scrollTop = conversationBox.scrollHeight;
+        };
+
+        requestAnimationFrame(() => {
+            scrollToLatest();
+            requestAnimationFrame(scrollToLatest);
+        });
+    })();
+
+    // 切换项目
+    function switchProject(projectId) {
+        if (projectId) {
+            window.location.href = `/projects/${projectId}/switch/`;
+        }
+    }
+
+    // 绑定回车发送和提交处理
+    (function () {
+        const textarea = document.getElementById("id_content");
+        const form = textarea ? textarea.form : null;
+        if (!form || !textarea) {
+            return;
+        }
+
+        const submitButton = form.querySelector("button[type='submit']");
+        const fileInput = document.getElementById("id_attachment");
+        const attachmentTrigger = document.getElementById("attachmentTrigger");
+        const attachmentInfo = document.getElementById("selectedAttachmentInfo");
+        const speechBtn = document.getElementById("speechRecognizeBtn");
+
+        // 绑定表单提交事件
+        form.addEventListener("submit", function (event) {
+            if (isRecording) {
+                event.preventDefault();
+                stopRecording();
+                setRecordStatus("请等待录音处理完成后再次发送");
+                return;
+            }
+            if (submitButton) {
+                submitButton.disabled = true;
+                submitButton.textContent = "正在发送...";
+            }
+        });
+
+        textarea.placeholder = "有问题，尽管问";
+        textarea.rows = 1;
+
+        // 绑定回车键
+        textarea.addEventListener("keydown", function (event) {
+            if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                form.submit();
+            }
+        });
+
+        textarea.addEventListener("paste", function (event) {
+            const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+            for (let index in items) {
+                const item = items[index];
+                if (item.kind === 'file') {
+                    const blob = item.getAsFile();
+                    if (!fileInput) {
+                        return;
+                    }
+                    const dataTransfer = new DataTransfer();
+                    dataTransfer.items.add(blob);
+                    fileInput.files = dataTransfer.files;
+                    updateAttachmentInfo();
+                }
+            }
+        });
+
+        if (fileInput) {
+            fileInput.accept = ".pdf,.doc,.docx,.wav,.mp3,.m4a,.ogg,.webm,audio/*";
+        }
+
+        const recordToggle = document.getElementById("voiceRecordToggle");
+        const recordStatus = document.getElementById("voiceRecordStatus");
+        const SpeechRecognitionApi = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+        let mediaRecorder = null;
+        let mediaStream = null;
+        let recordingRecognition = null;
+        let speechRecognition = null;
+        let chunks = [];
+        let isRecording = false;
+        let isSpeechListening = false;
+        let transcriptText = "";
+
+        const setRecordStatus = function (text) {
+            if (recordStatus) {
+                recordStatus.textContent = text;
+            }
+        };
+
+        const updateAttachmentInfo = function () {
+            if (!attachmentInfo || !fileInput) {
+                return;
+            }
+            const selectedFile = fileInput.files && fileInput.files[0];
+            if (!selectedFile) {
+                attachmentInfo.textContent = "";
+                return;
+            }
+            attachmentInfo.textContent = `已选择附件：${selectedFile.name}`;
+        };
+
+        if (fileInput) {
+            fileInput.addEventListener("change", updateAttachmentInfo);
+        }
+
+        if (attachmentTrigger && fileInput) {
+            attachmentTrigger.addEventListener("click", function () {
+                fileInput.click();
+            });
+        }
+
+        const stopMediaStream = function () {
+            if (!mediaStream) {
+                return;
+            }
+            mediaStream.getTracks().forEach(track => track.stop());
+            mediaStream = null;
+        };
+
+        const stopRecordingRecognition = function () {
+            if (!recordingRecognition) {
+                return;
+            }
+            try {
+                recordingRecognition.onresult = null;
+                recordingRecognition.onerror = null;
+                recordingRecognition.stop();
+            } catch (error) {
+                console.warn("Stop recognition failed:", error);
+            }
+            recordingRecognition = null;
+        };
+
+        const stopSpeechRecognition = function () {
+            if (!speechRecognition) {
+                return;
+            }
+            try {
+                speechRecognition.onresult = null;
+                speechRecognition.onerror = null;
+                speechRecognition.onend = null;
+                speechRecognition.stop();
+            } catch (error) {
+                console.warn("Stop speech recognition failed:", error);
+            }
+            speechRecognition = null;
+            isSpeechListening = false;
+            if (speechBtn) {
+                speechBtn.classList.remove("is-active");
+            }
+        };
+
+        const attachRecordedAudioToInput = function (audioBlob) {
+            if (!fileInput || !audioBlob) {
+                return;
+            }
+            const filename = `voice-${Date.now()}.webm`;
+            const audioFile = new File([audioBlob], filename, { type: audioBlob.type || "audio/webm" });
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(audioFile);
+            fileInput.files = dataTransfer.files;
+            updateAttachmentInfo();
+        };
+
+        const applyTranscriptToTextarea = function () {
+            const normalized = (transcriptText || "").trim();
+            if (!normalized) {
+                return;
+            }
+            if (!textarea.value.trim()) {
+                textarea.value = normalized;
+                return;
+            }
+            if (!textarea.value.includes(normalized)) {
+                textarea.value = `${textarea.value.trim()}\n${normalized}`;
+            }
+        };
+
+        const stopRecording = function () {
+            if (!isRecording) {
+                return;
+            }
+            isRecording = false;
+            if (recordToggle) {
+                recordToggle.classList.remove("is-recording");
+            }
+            setRecordStatus("正在处理录音...");
+            stopRecordingRecognition();
+
+            if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                mediaRecorder.stop();
+            } else {
+                stopMediaStream();
+                setRecordStatus("录音已结束");
+            }
+        };
+
+        const startRecording = async function () {
+            if (!recordToggle || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                setRecordStatus("当前浏览器不支持录音");
+                return;
+            }
+            stopSpeechRecognition();
+            transcriptText = "";
+            chunks = [];
+
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(mediaStream);
+            } catch (error) {
+                console.error("Get user media failed:", error);
+                setRecordStatus("无法访问麦克风");
+                return;
+            }
+
+            mediaRecorder.ondataavailable = function (event) {
+                if (event.data && event.data.size > 0) {
+                    chunks.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = function () {
+                const audioBlob = new Blob(chunks, { type: "audio/webm" });
+                attachRecordedAudioToInput(audioBlob);
+                applyTranscriptToTextarea();
+                stopMediaStream();
+                setRecordStatus("录音已结束，可直接发送");
+            };
+
+            if (SpeechRecognitionApi) {
+                try {
+                    recordingRecognition = new SpeechRecognitionApi();
+                    recordingRecognition.lang = "zh-CN";
+                    recordingRecognition.interimResults = true;
+                    recordingRecognition.continuous = true;
+                    recordingRecognition.onresult = function (event) {
+                        let merged = "";
+                        for (let i = 0; i < event.results.length; i += 1) {
+                            merged += event.results[i][0].transcript || "";
+                        }
+                        transcriptText = merged.trim();
+                        if (transcriptText) {
+                            setRecordStatus("识别中...");
+                        }
+                    };
+                    recordingRecognition.onerror = function (event) {
+                        console.warn("Speech recognition error:", event.error);
+                    };
+                    recordingRecognition.start();
+                } catch (error) {
+                    console.warn("Speech recognition start failed:", error);
+                }
+            } else {
+                setRecordStatus("浏览器不支持语音识别，将仅发送语音附件");
+            }
+
+            mediaRecorder.start();
+            isRecording = true;
+            recordToggle.classList.add("is-recording");
+            if (SpeechRecognitionApi) {
+                setRecordStatus("录音中，正在识别...");
+            } else {
+                setRecordStatus("录音中...");
+            }
+        };
+
+        const startSpeechRecognition = function () {
+            if (!SpeechRecognitionApi) {
+                setRecordStatus("当前浏览器不支持语音识别");
+                return;
+            }
+            if (isRecording) {
+                setRecordStatus("录音进行中，请先停止录音");
+                return;
+            }
+            if (isSpeechListening) {
+                stopSpeechRecognition();
+                setRecordStatus("已停止语音识别");
+                return;
+            }
+
+            transcriptText = "";
+            speechRecognition = new SpeechRecognitionApi();
+            speechRecognition.lang = "zh-CN";
+            speechRecognition.interimResults = true;
+            speechRecognition.continuous = true;
+            speechRecognition.onresult = function (event) {
+                let merged = "";
+                for (let i = 0; i < event.results.length; i += 1) {
+                    merged += event.results[i][0].transcript || "";
+                }
+                transcriptText = merged.trim();
+                applyTranscriptToTextarea();
+            };
+            speechRecognition.onerror = function (event) {
+                console.warn("Speech recognize error:", event.error);
+            };
+            speechRecognition.onend = function () {
+                isSpeechListening = false;
+                if (speechBtn) {
+                    speechBtn.classList.remove("is-active");
+                }
+                setRecordStatus("语音识别已结束");
+            };
+            speechRecognition.start();
+            isSpeechListening = true;
+            if (speechBtn) {
+                speechBtn.classList.add("is-active");
+            }
+            setRecordStatus("语音识别中...");
+        };
+
+        if (speechBtn) {
+            speechBtn.addEventListener("click", startSpeechRecognition);
+        }
+
+        if (recordToggle) {
+            recordToggle.addEventListener("click", function () {
+                if (isRecording) {
+                    stopRecording();
+                    return;
+                }
+                startRecording();
+            });
+        }
+    })();
+
+    (function () {
+        const toggleButtons = document.querySelectorAll(".transcript-toggle-btn");
+        toggleButtons.forEach(button => {
+            button.addEventListener("click", function () {
+                const targetId = button.getAttribute("data-target-id");
+                if (!targetId) {
+                    return;
+                }
+                const textBox = document.getElementById(targetId);
+                if (!textBox) {
+                    return;
+                }
+                const isCollapsed = textBox.classList.toggle("is-collapsed");
+                button.textContent = isCollapsed ? "展开文字" : "收起文字";
+            });
+        });
+    })();
+
+    // LLM 选择器逻辑
+    (function () {
+        const dropdown = document.getElementById('llmDropdown');
+        const toggleButton = document.getElementById('llmDropdownToggle');
+        const menu = document.getElementById('llmDropdownMenu');
+
+        let providers = [];
+        menu.innerHTML = '<div class="dropdown-item" style="cursor: default;">加载中...</div>';
+
+        // 一次性获取厂商及模型树，避免二级菜单异步丢失
+        fetch('/api/llm-providers/')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                providers = Array.isArray(data) ? data : [];
+                buildMenu();
+            })
+            .catch((error) => {
+                menu.innerHTML = `<div class="dropdown-item" style="cursor: default; color: var(--muted);">模型加载失败：${error.message}</div>`;
+            });
+
+        function buildMenu() {
+            menu.innerHTML = '';
+            const cascade = document.createElement('div');
+            cascade.className = 'llm-cascade';
+
+            const providerList = document.createElement('div');
+            providerList.className = 'llm-provider-list';
+
+            const modelList = document.createElement('div');
+            modelList.className = 'llm-model-list';
+
+            const renderModels = (provider) => {
+                modelList.innerHTML = '';
+                if (provider.models && provider.models.length > 0) {
+                    provider.models.forEach(model => {
+                        const modelItem = document.createElement('div');
+                        modelItem.className = 'dropdown-item';
+                        modelItem.textContent = model.name;
+                        modelItem.dataset.modelId = model.id;
+                        modelItem.dataset.modelName = model.name;
+                        modelList.appendChild(modelItem);
+                    });
+                    return;
+                }
+
+                const emptyItem = document.createElement('div');
+                emptyItem.className = 'dropdown-item';
+                emptyItem.textContent = '暂无模型';
+                emptyItem.style.color = 'var(--muted)';
+                emptyItem.style.cursor = 'default';
+                modelList.appendChild(emptyItem);
+            };
+
+            providers.forEach((provider, index) => {
+                const providerItem = document.createElement('div');
+                providerItem.className = 'dropdown-item';
+                providerItem.textContent = provider.name;
+
+                providerItem.addEventListener('mouseenter', () => {
+                    providerList.querySelectorAll('.dropdown-item').forEach(item => item.classList.remove('active'));
+                    providerItem.classList.add('active');
+                    renderModels(provider);
+                });
+
+                if (index === 0) {
+                    providerItem.classList.add('active');
+                    renderModels(provider);
+                }
+                providerList.appendChild(providerItem);
+            });
+
+            if (providers.length === 0) {
+                modelList.innerHTML = '<div class="dropdown-item" style="cursor: default; color: var(--muted);">暂无厂商或模型</div>';
+            } else if (!modelList.children.length) {
+                modelList.innerHTML = '<div class="dropdown-item" style="cursor: default; color: var(--muted);">该厂商暂无模型</div>';
+            }
+
+            cascade.appendChild(providerList);
+            cascade.appendChild(modelList);
+            menu.appendChild(cascade);
+        }
+
+        // 事件处理
+        toggleButton.addEventListener('click', () => dropdown.classList.toggle('open'));
+
+        menu.addEventListener('click', (e) => {
+            if (e.target.dataset.modelId) {
+                const modelId = e.target.dataset.modelId;
+                const projectId = dropdown.dataset.projectId;
+                const csrfToken = dropdown.dataset.csrfToken;
+
+                const formData = new FormData();
+                formData.append('model_id', modelId);
+                formData.append('csrfmiddlewaretoken', csrfToken);
+
+                fetch(`/api/projects/${projectId}/set-llm/`, {
+                    method: 'POST',
+                    body: formData,
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        toggleButton.textContent = data.model_name;
+                    } else {
+                        console.error('Failed to set LLM model:', data.error);
+                    }
+                });
+
+                dropdown.classList.remove('open');
+            }
+        });
+
+        // 点击外部关闭菜单
+        document.addEventListener('click', (e) => {
+            if (!dropdown.contains(e.target)) {
+                dropdown.classList.remove('open');
+            }
+        });
+    })();
+</script>
+{% endblock %}
