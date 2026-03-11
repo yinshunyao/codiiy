@@ -1,0 +1,6 @@
+*
+!.gitignore
+!cache/
+!database/
+!tasks/
+!temp/

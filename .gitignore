@@ -1,1 +1,5 @@
 /core/code/db.sqlite3
+/core/.venv/
+/.pycache_tmp/
+*.pyc
+__pycache__

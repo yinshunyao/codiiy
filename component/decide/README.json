@@ -1,0 +1,197 @@
+{
+  "directory": "component/decide",
+  "description": "组件决策模块，提供 Qwen 客户端与文本/多模态推理调用能力。",
+  "components": [
+    {
+      "component_key": "decide.qwen_client_component",
+      "component_dir": "component/decide/qwen_client_component",
+      "description": "Qwen 客户端组件，封装 dashscope SDK 调用与结果标准化。",
+      "default_enabled": true,
+      "system_param_schema": {
+        "enabled": true,
+        "default_config_name": "default",
+        "fields": [
+          {
+            "name": "api_key",
+            "required": true,
+            "sensitive": true,
+            "description": "DashScope API Key"
+          }
+        ]
+      },
+      "required_config_fields": ["api_key"],
+      "optional_config_fields": []
+    }
+  ],
+  "functions": [
+    {
+      "path": "component.decide.create_qwen_client",
+      "component_key": "decide.qwen_client_component",
+      "description": "创建 QwenClient 实例，供调用方复用同一客户端。",
+      "input": {
+        "api_key": "str，可选，DashScope API Key",
+        "config_name": "str，可选，组件参数配置名称；默认读取 default"
+      },
+      "output": "QwenClient",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "config_name",
+            "required": false,
+            "sensitive": false,
+            "description": "组件配置名，默认 default",
+            "value_type": "string",
+            "default": "default"
+          },
+          {
+            "name": "api_key",
+            "required": false,
+            "sensitive": true,
+            "description": "显式 API Key，留空时读取组件配置",
+            "value_type": "string",
+            "default": ""
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.decide.chat_completion",
+      "component_key": "decide.qwen_client_component",
+      "description": "按消息列表调用 Qwen 聊天完成接口。",
+      "input": {
+        "api_key": "str，可选，DashScope API Key",
+        "config_name": "str，可选，组件参数配置名称；默认读取 default",
+        "model": "str，模型名称",
+        "messages": "list，消息列表",
+        "temperature": "float，可选，默认 0.7",
+        "max_tokens": "int，可选，默认 1024"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "config_name",
+            "required": false,
+            "sensitive": false,
+            "description": "组件配置名，默认 default",
+            "value_type": "string",
+            "default": "default"
+          },
+          {
+            "name": "api_key",
+            "required": false,
+            "sensitive": true,
+            "description": "显式 API Key，留空时读取组件配置",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "model",
+            "required": true,
+            "sensitive": false,
+            "description": "模型名称",
+            "value_type": "string",
+            "default": "qwen-plus"
+          },
+          {
+            "name": "messages",
+            "required": true,
+            "sensitive": false,
+            "description": "消息列表，JSON 数组格式",
+            "value_type": "json",
+            "default": "[{\"role\":\"user\",\"content\":\"你好\"}]"
+          },
+          {
+            "name": "temperature",
+            "required": false,
+            "sensitive": false,
+            "description": "采样温度",
+            "value_type": "float",
+            "default": 0.7
+          },
+          {
+            "name": "max_tokens",
+            "required": false,
+            "sensitive": false,
+            "description": "最大输出 token 数",
+            "value_type": "int",
+            "default": 1024
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.decide.text_generation",
+      "component_key": "decide.qwen_client_component",
+      "description": "按提示词调用 Qwen 文本生成接口。",
+      "input": {
+        "api_key": "str，可选，DashScope API Key",
+        "config_name": "str，可选，组件参数配置名称；默认读取 default",
+        "model": "str，模型名称",
+        "prompt": "str，提示文本",
+        "temperature": "float，可选，默认 0.7",
+        "max_tokens": "int，可选，默认 1024"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "config_name",
+            "required": false,
+            "sensitive": false,
+            "description": "组件配置名，默认 default",
+            "value_type": "string",
+            "default": "default"
+          },
+          {
+            "name": "api_key",
+            "required": false,
+            "sensitive": true,
+            "description": "显式 API Key，留空时读取组件配置",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "model",
+            "required": true,
+            "sensitive": false,
+            "description": "模型名称",
+            "value_type": "string",
+            "default": "qwen-plus"
+          },
+          {
+            "name": "prompt",
+            "required": true,
+            "sensitive": false,
+            "description": "提示文本",
+            "value_type": "string",
+            "default": "请用一句话介绍你自己"
+          },
+          {
+            "name": "temperature",
+            "required": false,
+            "sensitive": false,
+            "description": "采样温度",
+            "value_type": "float",
+            "default": 0.7
+          },
+          {
+            "name": "max_tokens",
+            "required": false,
+            "sensitive": false,
+            "description": "最大输出 token 数",
+            "value_type": "int",
+            "default": 1024
+          }
+        ]
+      }
+    }
+  ],
+  "notes": [
+    "后续新增函数时需同步维护本文件中的函数路径与说明。",
+    "新增能力需采用 component/<module>/<component_name> 目录模式。"
+  ]
+}

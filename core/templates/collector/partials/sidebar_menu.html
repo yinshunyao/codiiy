@@ -1,0 +1,69 @@
+<div class="brand">需求对话台</div>
+
+<div class="menu-tree">
+    <section class="menu-section is-open" data-menu-section>
+        <button type="button" class="menu-section-toggle" data-menu-toggle>
+            <span>聊天</span>
+            <span class="menu-toggle-mark">-</span>
+        </button>
+        <div class="menu-section-body">
+            <div class="menu-item-row">
+                <a class="menu-item-link menu-item-main {% if not control_active_module %}active{% endif %}" href="{% if primary_chat_session %}{% url 'session_detail' primary_chat_session.id %}{% else %}{% url 'session_list' %}{% endif %}">
+                    聊天
+                    <div class="meta">当前对话 / 最近会话</div>
+                </a>
+                <a class="menu-item-add-btn" href="{% url 'session_list' %}" title="新建对话" aria-label="新建对话">+</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="menu-section is-open" data-menu-section>
+        <button type="button" class="menu-section-toggle" data-menu-toggle>
+            <span>组件</span>
+            <span class="menu-toggle-mark">-</span>
+        </button>
+        <div class="menu-section-body">
+            {% for module_key, module_label in control_modules.items %}
+            <a class="menu-item-link {% if control_active_module == module_key %}active{% endif %}" href="{% url 'control_function_list' module_key %}">{{ module_label }}（{{ module_key }}）</a>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="menu-section {% if current_nav == 'settings_projects' or current_nav == 'settings_requirements' or current_nav == 'settings_profile' or current_nav == 'settings_admin' %}is-open{% endif %}" data-menu-section>
+        <button type="button" class="menu-section-toggle" data-menu-toggle>
+            <span>设置</span>
+            <span class="menu-toggle-mark">{% if current_nav == 'settings_projects' or current_nav == 'settings_requirements' or current_nav == 'settings_profile' or current_nav == 'settings_admin' %}-{% else %}+{% endif %}</span>
+        </button>
+        <div class="menu-section-body">
+            <a class="menu-item-link {% if current_nav == 'settings_projects' %}active{% endif %}" href="{% url 'project_list' %}">项目管理</a>
+            <a class="menu-item-link {% if current_nav == 'settings_requirements' %}active{% endif %}" href="{% url 'requirement_file_list' %}">资源管理器</a>
+            <a class="menu-item-link {% if current_nav == 'settings_admin' %}active{% endif %}" href="/admin/">管理后台</a>
+        </div>
+    </section>
+</div>
+
+<div class="panel user-card">
+    <div class="user-top-row">
+        <a class="user-profile-link" href="{% url 'profile_settings' %}" title="进入个人设置">
+            <span class="user-avatar" aria-hidden="true">{{ request.user.username|first|upper }}</span>
+            <span class="user-name">{{ request.user.username }}</span>
+        </a>
+        <span class="user-status-chip">在线</span>
+    </div>
+    <form action="{% url 'system_settings' %}" method="post" class="user-theme-form" style="margin-top: 12px;">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <input type="hidden" name="ui_theme" class="js-sidebar-theme-value" value="{{ ui_theme|default:'dark' }}">
+        <span class="meta" style="margin: 0;">主题</span>
+        <label class="sidebar-theme-toggle" for="sidebarThemeToggle">
+            <input
+                id="sidebarThemeToggle"
+                type="checkbox"
+                class="js-sidebar-theme-toggle"
+                {% if ui_theme == "light" %}checked{% endif %}
+                aria-label="切换亮色主题"
+            >
+            <span class="sidebar-theme-slider"></span>
+        </label>
+    </form>
+</div>

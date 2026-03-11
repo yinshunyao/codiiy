@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}删除项目{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-settings {
+        grid-template-columns: 260px 1fr;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+<div class="app-shell app-shell-settings">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">删除项目</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right"></div>
+        </div>
+
+        <section class="conversation">
+            <div class="chat-track">
+                <div class="panel" style="max-width: 500px; border-color: #ff6b6b;">
+                    <h2 style="margin-top: 0; color: #ff6b6b;">确认删除项目</h2>
+
+                    <p style="color: var(--muted);">您确定要删除以下项目吗？此操作不可恢复！</p>
+
+                    <div class="panel" style="background: rgba(255, 107, 107, 0.1); margin: 16px 0;">
+                        <strong>{{ project.name }}</strong>
+                        <div class="meta" style="margin-top: 8px;">路径：{{ project.path }}</div>
+                        {% if project.description %}
+                        <div class="meta" style="margin-top: 4px;">描述：{{ project.description }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div style="background: rgba(255, 193, 7, 0.1); border: 1px solid rgba(255, 193, 7, 0.3); border-radius: 8px; padding: 12px; margin: 16px 0;">
+                        <strong style="color: #ffc107;">警告：</strong>
+                        <span style="color: var(--muted);">删除项目将同时删除该项目下的所有会话记录！</span>
+                    </div>
+
+                    <form method="post" style="margin-top: 20px;">
+                        {% csrf_token %}
+                        <div style="display: flex; gap: 12px;">
+                            <button type="submit" style="background: #ff6b6b;">确认删除</button>
+                            <a href="{% url 'project_list' %}" class="ghost-btn" style="padding: 10px 14px; display: inline-block; text-decoration: none;">取消</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+<script>
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

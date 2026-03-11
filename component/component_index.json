@@ -1,0 +1,126 @@
+{
+  "components": {
+    "observe.screen_capture_component": {
+      "module": "observe",
+      "component_dir": "component/observe/screen_capture_component",
+      "export_functions": [
+        "component.observe.capture_screen_to_file"
+      ],
+      "default_enabled": true,
+      "version": "1.0.0"
+    },
+    "observe.screen_understand_component": {
+      "module": "observe",
+      "component_dir": "component/observe/screen_understand_component",
+      "export_functions": [
+        "component.observe.understand_image",
+        "component.observe.understand_current_screen"
+      ],
+      "default_enabled": true,
+      "version": "1.0.0"
+    },
+    "handle.file_reader_component": {
+      "module": "handle",
+      "component_dir": "component/handle/file_reader_component",
+      "export_functions": [
+        "component.handle.read_file",
+        "component.handle.read_lines",
+        "component.handle.search_keyword",
+        "component.handle.search_regex",
+        "component.handle.get_file_stats",
+        "component.handle.get_system_info"
+      ],
+      "default_enabled": true,
+      "version": "1.0.0"
+    },
+    "handle.mouse_action_component": {
+      "module": "handle",
+      "component_dir": "component/handle/mouse_action_component",
+      "export_functions": [
+        "component.handle.mouse_click",
+        "component.handle.mouse_double_click",
+        "component.handle.mouse_move",
+        "component.handle.mouse_scroll",
+        "component.handle.mouse_drag_to",
+        "component.handle.get_mouse_position"
+      ],
+      "default_enabled": true,
+      "version": "1.0.0"
+    },
+    "handle.python_package_component": {
+      "module": "handle",
+      "component_dir": "component/handle/python_package_component",
+      "export_functions": [
+        "component.handle.query_python_package",
+        "component.handle.install_python_package",
+        "component.handle.uninstall_python_package"
+      ],
+      "default_enabled": true,
+      "version": "1.0.0"
+    },
+    "communicate.dingtalk_component": {
+      "module": "communicate",
+      "component_dir": "component/communicate/dingtalk_component",
+      "export_functions": [
+        "component.communicate.send_dingtalk_text"
+      ],
+      "default_enabled": true,
+      "version": "1.0.0"
+    },
+    "communicate.wecom_component": {
+      "module": "communicate",
+      "component_dir": "component/communicate/wecom_component",
+      "export_functions": [
+        "component.communicate.send_wecom_text"
+      ],
+      "default_enabled": true,
+      "version": "1.0.0"
+    },
+    "communicate.feishu_component": {
+      "module": "communicate",
+      "component_dir": "component/communicate/feishu_component",
+      "export_functions": [
+        "component.communicate.send_feishu_text"
+      ],
+      "default_enabled": true,
+      "version": "1.0.0"
+    },
+    "decide.qwen_client_component": {
+      "module": "decide",
+      "component_dir": "component/decide/qwen_client_component",
+      "export_functions": [
+        "component.decide.create_qwen_client",
+        "component.decide.chat_completion",
+        "component.decide.text_generation"
+      ],
+      "default_enabled": true,
+      "version": "1.0.0"
+    }
+  },
+  "function_to_component": {
+    "component.observe.capture_screen_to_file": "observe.screen_capture_component",
+    "component.observe.understand_image": "observe.screen_understand_component",
+    "component.observe.understand_current_screen": "observe.screen_understand_component",
+    "component.handle.read_file": "handle.file_reader_component",
+    "component.handle.read_lines": "handle.file_reader_component",
+    "component.handle.search_keyword": "handle.file_reader_component",
+    "component.handle.search_regex": "handle.file_reader_component",
+    "component.handle.get_file_stats": "handle.file_reader_component",
+    "component.handle.get_system_info": "handle.file_reader_component",
+    "component.handle.mouse_click": "handle.mouse_action_component",
+    "component.handle.mouse_double_click": "handle.mouse_action_component",
+    "component.handle.mouse_move": "handle.mouse_action_component",
+    "component.handle.mouse_scroll": "handle.mouse_action_component",
+    "component.handle.mouse_drag_to": "handle.mouse_action_component",
+    "component.handle.get_mouse_position": "handle.mouse_action_component",
+    "component.handle.query_python_package": "handle.python_package_component",
+    "component.handle.install_python_package": "handle.python_package_component",
+    "component.handle.uninstall_python_package": "handle.python_package_component",
+    "component.communicate.send_dingtalk_text": "communicate.dingtalk_component",
+    "component.communicate.send_wecom_text": "communicate.wecom_component",
+    "component.communicate.send_feishu_text": "communicate.feishu_component",
+    "component.decide.create_qwen_client": "decide.qwen_client_component",
+    "component.decide.chat_completion": "decide.qwen_client_component",
+    "component.decide.text_generation": "decide.qwen_client_component"
+  }
+}

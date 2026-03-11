@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+
+{% block title %}组件功能列表{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-control {
+        grid-template-columns: 260px 1fr;
+    }
+    .control-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: nowrap;
+        margin-bottom: 10px;
+    }
+    .control-search-form {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0;
+    }
+    .control-search-input {
+        width: 50%;
+        min-width: 260px;
+        height: 36px;
+        box-sizing: border-box;
+    }
+    .control-toolbar-btn {
+        height: 36px;
+        padding: 0 14px;
+        line-height: 36px;
+    }
+    .component-card-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        cursor: pointer;
+    }
+    .component-api-panel {
+        display: none;
+    }
+    .component-api-panel.is-open {
+        display: block;
+    }
+    .component-action-form {
+        display: inline-block;
+        margin: 0;
+    }
+    .component-chip-btn {
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 12px;
+        line-height: normal;
+    }
+    .component-chip-btn:hover {
+        background: transparent;
+        color: var(--muted);
+        border-color: var(--line);
+    }
+    .component-permission-item {
+        margin-top: 6px;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+<div class="app-shell app-shell-control">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">组件：{{ control_module_name }}</span>
+                <span class="chip">总函数：{{ control_function_total }}</span>
+                <span class="chip">匹配：{{ control_function_filtered }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'session_list' %}">返回对话页</a>
+            </div>
+        </div>
+
+        <section class="panel" style="margin-bottom: 12px;">
+            <div class="control-toolbar">
+                <form method="get" action="{% url 'control_function_list' control_active_module %}" class="control-search-form">
+                    <input type="text" name="q" value="{{ control_keyword }}" placeholder="模糊搜索函数路径/描述/参数" class="control-search-input">
+                    <button type="submit" class="control-toolbar-btn">搜索</button>
+                    <button type="button" id="upload-trigger-btn" class="control-toolbar-btn">上传</button>
+                    {% if control_keyword %}
+                    <a class="chip" href="{% url 'control_function_list' control_active_module %}">清空</a>
+                    {% endif %}
+                </form>
+            </div>
+            <div class="meta" style="margin-top: 10px;">
+                上传说明：仅支持 `.zip`，压缩包必须只包含一个组件目录；上传后服务端会在 `component/{{ control_active_module }}` 下解压并创建该组件。
+            </div>
+            <form method="post" action="{% url 'control_function_upload' control_active_module %}" enctype="multipart/form-data" id="zip-upload-form" style="display: none;">
+                {% csrf_token %}
+                <input type="file" name="zip_file" id="zip-file-input" accept=".zip" required>
+            </form>
+        </section>
+
+        <section class="conversation panel">
+            {% if control_component_groups %}
+                {% for group in control_component_groups %}
+                <div class="panel" style="margin-bottom: 12px;">
+                    <div class="component-card-header" data-component-toggle data-target-id="component-api-{{ forloop.counter }}">
+                        <div style="min-width: 0;">
+                            <div><strong>{{ group.component.component_name|default:"-" }}</strong></div>
+                            <div class="meta">{{ group.component.description|default:"无描述" }}</div>
+                            <div class="meta">目录：{{ group.component.component_dir|default:"-" }}</div>
+                            <div class="meta">组件标识：{{ group.component.component_key|default:"-" }}</div>
+                            <div class="meta">状态：{{ group.component.status_text }}</div>
+                            <div class="meta">
+                                系统权限信息：
+                                {% if group.component.permission_rows %}
+                                    共 {{ group.component.permission_rows|length }} 项
+                                {% else %}
+                                    无系统权限要求
+                                {% endif %}
+                            </div>
+                            {% if group.component.permission_rows %}
+                            <div class="meta">
+                                {% for perm in group.component.permission_rows %}
+                                <div class="component-permission-item">
+                                    <span class="chip">{{ perm.name|default:"-" }} ({{ perm.key }})</span>
+                                    <span class="chip">{% if perm.required %}必需{% else %}可选{% endif %}</span>
+                                    <span class="chip">{% if perm.granted %}已确认{% else %}未确认{% endif %}</span>
+                                    {% if perm.description %}
+                                    <span class="chip" title="{{ perm.description }}">{{ perm.description }}</span>
+                                    {% endif %}
+                                    {% if perm.grant_url %}
+                                    <a class="chip" href="{{ perm.grant_url }}" target="_blank" rel="noopener noreferrer">授权指引</a>
+                                    {% endif %}
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                        <div style="white-space: nowrap;">
+                            {% if group.component.toggle_url %}
+                            <form method="post" action="{{ group.component.toggle_url }}" class="component-action-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="q" value="{{ control_keyword }}">
+                                <button type="submit" class="chip component-chip-btn">{{ group.component.toggle_action_text }}</button>
+                            </form>
+                            {% endif %}
+                            {% if group.component.config_enabled and group.component.config_url %}
+                            <a class="chip" href="{{ group.component.config_url }}">组件配置</a>
+                            {% endif %}
+                            {% if group.component.download_url %}
+                            <a class="chip" href="{{ group.component.download_url }}">下载组件</a>
+                            {% endif %}
+                            <span class="chip" data-toggle-text>展开 API</span>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 10px;" class="component-api-panel" id="component-api-{{ forloop.counter }}">
+                        <div class="meta">API 列表（{{ group.functions|length }}）</div>
+                        {% if group.functions %}
+                            {% for item in group.functions %}
+                            <div class="panel" style="margin-top: 8px;">
+                                <div><strong>{{ item.path|default:"-" }}</strong></div>
+                                <div class="meta">{{ item.description|default:"无描述" }}</div>
+                                <div style="margin-top: 6px;">
+                                    {% if item.test_url %}
+                                    <a class="chip" href="{{ item.test_url }}">测试 API</a>
+                                    {% endif %}
+                                    {% if item.config_enabled and item.config_url %}
+                                    <a class="chip" href="{{ item.config_url }}">组件配置</a>
+                                    {% endif %}
+                                </div>
+                                <div style="margin-top: 8px;">
+                                    <div class="meta">输入参数：</div>
+                                    <pre style="margin: 6px 0 0; white-space: pre-wrap;">{{ item.input|default:"{}" }}</pre>
+                                </div>
+                                <div style="margin-top: 8px;">
+                                    <div class="meta">输出：</div>
+                                    <pre style="margin: 6px 0 0; white-space: pre-wrap;">{{ item.output|default:"-" }}</pre>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="meta" style="margin-top: 6px;">当前筛选条件下该组件无匹配 API。</div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+
+                {% if control_ungrouped_functions %}
+                <div class="panel" style="margin-bottom: 12px;">
+                    <div><strong>未归属组件的 API</strong></div>
+                    {% for item in control_ungrouped_functions %}
+                    <div class="panel" style="margin-top: 8px;">
+                        <div><strong>{{ item.path|default:"-" }}</strong></div>
+                        <div class="meta">{{ item.description|default:"无描述" }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            {% else %}
+                <div class="panel">暂无组件信息，请检查 `component/{{ control_active_module }}/README.json` 的 components 定义。</div>
+            {% endif %}
+        </section>
+    </main>
+</div>
+
+<script>
+    function switchProject(projectId) {
+        if (projectId) {
+            window.location.href = `/projects/${projectId}/switch/`;
+        }
+    }
+    (function bindZipUpload() {
+        const triggerBtn = document.getElementById("upload-trigger-btn");
+        const fileInput = document.getElementById("zip-file-input");
+        const uploadForm = document.getElementById("zip-upload-form");
+        if (!triggerBtn || !fileInput || !uploadForm) {
+            return;
+        }
+        triggerBtn.addEventListener("click", function () {
+            fileInput.click();
+        });
+        fileInput.addEventListener("change", function () {
+            if (fileInput.files && fileInput.files.length > 0) {
+                uploadForm.submit();
+            }
+        });
+    })();
+
+    (function bindComponentAccordion() {
+        const toggles = Array.from(document.querySelectorAll("[data-component-toggle]"));
+        const panels = Array.from(document.querySelectorAll(".component-api-panel"));
+
+        function closeAllPanels() {
+            panels.forEach(function (panel) {
+                panel.classList.remove("is-open");
+            });
+            toggles.forEach(function (toggle) {
+                const textNode = toggle.querySelector("[data-toggle-text]");
+                if (textNode) {
+                    textNode.textContent = "展开 API";
+                }
+            });
+        }
+
+        toggles.forEach(function (toggle) {
+            toggle.addEventListener("click", function (event) {
+                if (event.target.closest("a, button, form, input")) {
+                    return;
+                }
+                const targetId = toggle.getAttribute("data-target-id");
+                const targetPanel = document.getElementById(targetId);
+                if (!targetPanel) {
+                    return;
+                }
+
+                const shouldOpen = !targetPanel.classList.contains("is-open");
+                closeAllPanels();
+                if (shouldOpen) {
+                    targetPanel.classList.add("is-open");
+                    const textNode = toggle.querySelector("[data-toggle-text]");
+                    if (textNode) {
+                        textNode.textContent = "收起 API";
+                    }
+                }
+            });
+        });
+    })();
+
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

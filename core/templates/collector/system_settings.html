@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}系统设置{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-settings {
+        grid-template-columns: 260px 1fr;
+    }
+    .settings-card {
+        max-width: 620px;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+<div class="app-shell app-shell-settings">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">系统设置</span>
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'session_list' %}">返回对话页</a>
+            </div>
+        </div>
+
+        <section class="conversation">
+            <div class="chat-track">
+                <div class="panel settings-card">
+                    <h2 style="margin-top: 0;">界面主题</h2>
+                    <div class="meta" style="margin-top: 4px;">
+                        可在暗色与亮色之间切换，切换后当前账号会话内所有页面保持一致主题。
+                    </div>
+                    <form method="post" style="margin-top: 16px;">
+                        {% csrf_token %}
+                        <label for="ui_theme">主题模式</label>
+                        <select id="ui_theme" name="ui_theme" style="max-width: 260px;">
+                            {% for key, label in ui_theme_options.items %}
+                            <option value="{{ key }}" {% if ui_theme == key %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                        <div style="margin-top: 14px;">
+                            <button type="submit">保存设置</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<script>
+    function switchProject(projectId) {
+        if (projectId) {
+            window.location.href = `/projects/${projectId}/switch/`;
+        }
+    }
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

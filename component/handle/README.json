@@ -1,0 +1,682 @@
+{
+  "directory": "component/handle",
+  "description": "执行与处理模块，提供文件读取、检索、元信息查询、鼠标操作与 Python 依赖包管理能力。",
+  "components": [
+    {
+      "component_key": "handle.file_reader_component",
+      "component_dir": "component/handle/file_reader_component",
+      "description": "文件读取组件，负责文件内容读取、行区间读取、关键字/正则检索和文件统计。",
+      "default_enabled": true,
+      "system_param_schema": {
+        "enabled": false,
+        "fields": []
+      }
+    },
+    {
+      "component_key": "handle.mouse_action_component",
+      "component_dir": "component/handle/mouse_action_component",
+      "description": "鼠标操作组件，提供单击、双击、移动、滚动、拖拽与位置查询等常用桌面鼠标能力。",
+      "default_enabled": true,
+      "system_param_schema": {
+        "enabled": false,
+        "fields": []
+      },
+      "system_permission_schema": {
+        "enabled": true,
+        "permissions": [
+          {
+            "key": "macos.accessibility",
+            "name": "macOS 辅助功能权限",
+            "required": true,
+            "description": "鼠标自动化操作依赖系统辅助功能授权。",
+            "grant_guide": "系统设置 -> 隐私与安全性 -> 辅助功能，为 Python/终端应用开启授权。",
+            "grant_url": ""
+          }
+        ]
+      }
+    },
+    {
+      "component_key": "handle.python_package_component",
+      "component_dir": "component/handle/python_package_component",
+      "description": "Python 依赖包管理组件，提供依赖包查询、安装与卸载能力。",
+      "default_enabled": true,
+      "system_param_schema": {
+        "enabled": false,
+        "fields": []
+      },
+      "system_permission_schema": {
+        "enabled": true,
+        "permissions": [
+          {
+            "key": "python.venv_write",
+            "name": "Python 运行环境可写权限",
+            "required": true,
+            "description": "安装/卸载依赖时，当前 Python 环境与 site-packages 目录需要可写。",
+            "grant_guide": "建议在非 root 用户下使用虚拟环境运行 Django；避免 sudo 直接运行。",
+            "grant_url": ""
+          },
+          {
+            "key": "python.pip_cache_write",
+            "name": "pip 缓存目录可写权限",
+            "required": false,
+            "description": "用于提升 pip 安装性能；不可写时通常可继续安装但会出现告警。",
+            "grant_guide": "确保用户对 ~/.cache/pip 或等效缓存目录有写权限。",
+            "grant_url": ""
+          }
+        ]
+      }
+    }
+  ],
+  "functions": [
+    {
+      "path": "component.handle.read_file",
+      "component_key": "handle.file_reader_component",
+      "description": "读取整个文件内容并返回文件元信息。",
+      "input": {
+        "file_path": "str，文件路径",
+        "encoding": "str，可选，默认 utf-8"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "file_path",
+            "required": true,
+            "sensitive": false,
+            "description": "待读取文件路径",
+            "value_type": "string",
+            "default": "readme.md"
+          },
+          {
+            "name": "encoding",
+            "required": false,
+            "sensitive": false,
+            "description": "文件编码",
+            "value_type": "string",
+            "default": "utf-8"
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.read_lines",
+      "component_key": "handle.file_reader_component",
+      "description": "读取文件指定行范围（包含结束行）。",
+      "input": {
+        "file_path": "str，文件路径",
+        "start_line": "int，开始行号（从 1 开始）",
+        "end_line": "int，结束行号（包含）",
+        "encoding": "str，可选，默认 utf-8"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "file_path",
+            "required": true,
+            "sensitive": false,
+            "description": "待读取文件路径",
+            "value_type": "string",
+            "default": "readme.md"
+          },
+          {
+            "name": "start_line",
+            "required": true,
+            "sensitive": false,
+            "description": "开始行号（从 1 开始）",
+            "value_type": "int",
+            "default": 1
+          },
+          {
+            "name": "end_line",
+            "required": true,
+            "sensitive": false,
+            "description": "结束行号（包含）",
+            "value_type": "int",
+            "default": 20
+          },
+          {
+            "name": "encoding",
+            "required": false,
+            "sensitive": false,
+            "description": "文件编码",
+            "value_type": "string",
+            "default": "utf-8"
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.search_keyword",
+      "component_key": "handle.file_reader_component",
+      "description": "按关键字搜索文件并返回上下文。",
+      "input": {
+        "file_path": "str，文件路径",
+        "keyword": "str，关键字",
+        "context_lines": "int，可选，默认 3",
+        "encoding": "str，可选，默认 utf-8",
+        "case_sensitive": "bool，可选，默认 false"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "file_path",
+            "required": true,
+            "sensitive": false,
+            "description": "待搜索文件路径",
+            "value_type": "string",
+            "default": "readme.md"
+          },
+          {
+            "name": "keyword",
+            "required": true,
+            "sensitive": false,
+            "description": "关键字",
+            "value_type": "string",
+            "default": "component"
+          },
+          {
+            "name": "context_lines",
+            "required": false,
+            "sensitive": false,
+            "description": "上下文行数",
+            "value_type": "int",
+            "default": 3
+          },
+          {
+            "name": "encoding",
+            "required": false,
+            "sensitive": false,
+            "description": "文件编码",
+            "value_type": "string",
+            "default": "utf-8"
+          },
+          {
+            "name": "case_sensitive",
+            "required": false,
+            "sensitive": false,
+            "description": "是否大小写敏感",
+            "value_type": "bool",
+            "default": false
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.search_regex",
+      "component_key": "handle.file_reader_component",
+      "description": "按正则表达式搜索文件并返回上下文。",
+      "input": {
+        "file_path": "str，文件路径",
+        "pattern": "str，正则表达式",
+        "context_lines": "int，可选，默认 3",
+        "encoding": "str，可选，默认 utf-8"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "file_path",
+            "required": true,
+            "sensitive": false,
+            "description": "待搜索文件路径",
+            "value_type": "string",
+            "default": "readme.md"
+          },
+          {
+            "name": "pattern",
+            "required": true,
+            "sensitive": false,
+            "description": "正则表达式",
+            "value_type": "string",
+            "default": "component"
+          },
+          {
+            "name": "context_lines",
+            "required": false,
+            "sensitive": false,
+            "description": "上下文行数",
+            "value_type": "int",
+            "default": 3
+          },
+          {
+            "name": "encoding",
+            "required": false,
+            "sensitive": false,
+            "description": "文件编码",
+            "value_type": "string",
+            "default": "utf-8"
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.get_file_stats",
+      "component_key": "handle.file_reader_component",
+      "description": "获取文件统计信息（大小、行数、时间戳等）。",
+      "input": {
+        "file_path": "str，文件路径"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "file_path",
+            "required": true,
+            "sensitive": false,
+            "description": "待统计文件路径",
+            "value_type": "string",
+            "default": "readme.md"
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.get_system_info",
+      "component_key": "handle.file_reader_component",
+      "description": "获取当前运行环境系统信息。",
+      "input": {},
+      "output": "dict，统一返回 success/data",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": []
+      }
+    },
+    {
+      "path": "component.handle.query_python_package",
+      "component_key": "handle.python_package_component",
+      "description": "查询 Python 包是否已安装及基础元信息。",
+      "input": {
+        "package_name": "str，包名（如 requests）"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "package_name",
+            "required": true,
+            "sensitive": false,
+            "description": "待查询 Python 包名",
+            "value_type": "string",
+            "default": "requests"
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.install_python_package",
+      "component_key": "handle.python_package_component",
+      "description": "安装 Python 包，支持指定版本与升级安装。",
+      "input": {
+        "package_name": "str，包名（如 requests）",
+        "version": "str，可选，指定版本号；为空表示安装最新可用版本",
+        "upgrade": "bool，可选，默认 false，是否执行升级安装",
+        "timeout_seconds": "int，可选，默认 300，命令超时时间（秒）",
+        "use_sudo": "bool，可选，默认 false，是否通过 sudo 执行安装",
+        "sudo_password": "str，可选，管理员密码；use_sudo=true 时必填"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "package_name",
+            "required": true,
+            "sensitive": false,
+            "description": "待安装 Python 包名",
+            "value_type": "string",
+            "default": "requests"
+          },
+          {
+            "name": "version",
+            "required": false,
+            "sensitive": false,
+            "description": "指定安装版本，留空表示最新可用版本",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "upgrade",
+            "required": false,
+            "sensitive": false,
+            "description": "是否升级到最新版本",
+            "value_type": "bool",
+            "default": false
+          },
+          {
+            "name": "timeout_seconds",
+            "required": false,
+            "sensitive": false,
+            "description": "安装超时时间（秒）",
+            "value_type": "int",
+            "default": 300
+          },
+          {
+            "name": "use_sudo",
+            "required": false,
+            "sensitive": false,
+            "description": "是否通过 sudo 执行安装",
+            "value_type": "bool",
+            "default": false
+          },
+          {
+            "name": "sudo_password",
+            "required": false,
+            "sensitive": true,
+            "description": "管理员密码（仅在 use_sudo=true 时需要）",
+            "value_type": "string",
+            "default": ""
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.uninstall_python_package",
+      "component_key": "handle.python_package_component",
+      "description": "卸载指定 Python 包。",
+      "input": {
+        "package_name": "str，包名（如 requests）",
+        "timeout_seconds": "int，可选，默认 300，命令超时时间（秒）",
+        "use_sudo": "bool，可选，默认 false，是否通过 sudo 执行卸载",
+        "sudo_password": "str，可选，管理员密码；use_sudo=true 时必填"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "package_name",
+            "required": true,
+            "sensitive": false,
+            "description": "待卸载 Python 包名",
+            "value_type": "string",
+            "default": "requests"
+          },
+          {
+            "name": "timeout_seconds",
+            "required": false,
+            "sensitive": false,
+            "description": "卸载超时时间（秒）",
+            "value_type": "int",
+            "default": 300
+          },
+          {
+            "name": "use_sudo",
+            "required": false,
+            "sensitive": false,
+            "description": "是否通过 sudo 执行卸载",
+            "value_type": "bool",
+            "default": false
+          },
+          {
+            "name": "sudo_password",
+            "required": false,
+            "sensitive": true,
+            "description": "管理员密码（仅在 use_sudo=true 时需要）",
+            "value_type": "string",
+            "default": ""
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.mouse_click",
+      "component_key": "handle.mouse_action_component",
+      "description": "执行鼠标单击（也可通过 clicks 控制多次点击），可选先移动到指定坐标。",
+      "input": {
+        "x": "int，可选，目标 x 坐标，不传则使用当前位置",
+        "y": "int，可选，目标 y 坐标，不传则使用当前位置",
+        "button": "str，可选，left/right/middle，默认 left",
+        "clicks": "int，可选，点击次数，默认 1",
+        "interval_seconds": "float，可选，多次点击之间间隔秒数，默认 0.0"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "x",
+            "required": false,
+            "sensitive": false,
+            "description": "目标 x 坐标，不填表示当前位置",
+            "value_type": "int",
+            "default": 300
+          },
+          {
+            "name": "y",
+            "required": false,
+            "sensitive": false,
+            "description": "目标 y 坐标，不填表示当前位置",
+            "value_type": "int",
+            "default": 300
+          },
+          {
+            "name": "button",
+            "required": false,
+            "sensitive": false,
+            "description": "鼠标按键：left/right/middle",
+            "value_type": "string",
+            "default": "left"
+          },
+          {
+            "name": "clicks",
+            "required": false,
+            "sensitive": false,
+            "description": "点击次数",
+            "value_type": "int",
+            "default": 1
+          },
+          {
+            "name": "interval_seconds",
+            "required": false,
+            "sensitive": false,
+            "description": "点击间隔（秒）",
+            "value_type": "float",
+            "default": 0.0
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.mouse_double_click",
+      "component_key": "handle.mouse_action_component",
+      "description": "执行鼠标双击，可选先移动到指定坐标。",
+      "input": {
+        "x": "int，可选，目标 x 坐标，不传则使用当前位置",
+        "y": "int，可选，目标 y 坐标，不传则使用当前位置",
+        "button": "str，可选，left/right/middle，默认 left",
+        "interval_seconds": "float，可选，双击间隔秒数，默认 0.0"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "x",
+            "required": false,
+            "sensitive": false,
+            "description": "目标 x 坐标，不填表示当前位置",
+            "value_type": "int",
+            "default": 300
+          },
+          {
+            "name": "y",
+            "required": false,
+            "sensitive": false,
+            "description": "目标 y 坐标，不填表示当前位置",
+            "value_type": "int",
+            "default": 300
+          },
+          {
+            "name": "button",
+            "required": false,
+            "sensitive": false,
+            "description": "鼠标按键：left/right/middle",
+            "value_type": "string",
+            "default": "left"
+          },
+          {
+            "name": "interval_seconds",
+            "required": false,
+            "sensitive": false,
+            "description": "双击间隔（秒）",
+            "value_type": "float",
+            "default": 0.0
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.mouse_move",
+      "component_key": "handle.mouse_action_component",
+      "description": "移动鼠标到指定屏幕坐标。",
+      "input": {
+        "x": "int，目标 x 坐标",
+        "y": "int，目标 y 坐标",
+        "duration_seconds": "float，可选，移动耗时秒数，默认 0.0"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "x",
+            "required": true,
+            "sensitive": false,
+            "description": "目标 x 坐标",
+            "value_type": "int",
+            "default": 300
+          },
+          {
+            "name": "y",
+            "required": true,
+            "sensitive": false,
+            "description": "目标 y 坐标",
+            "value_type": "int",
+            "default": 300
+          },
+          {
+            "name": "duration_seconds",
+            "required": false,
+            "sensitive": false,
+            "description": "移动耗时（秒）",
+            "value_type": "float",
+            "default": 0.2
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.mouse_scroll",
+      "component_key": "handle.mouse_action_component",
+      "description": "执行鼠标滚动，正数向上、负数向下，可选先移动到指定坐标。",
+      "input": {
+        "clicks": "int，滚动刻度，正数向上，负数向下",
+        "x": "int，可选，目标 x 坐标",
+        "y": "int，可选，目标 y 坐标"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "clicks",
+            "required": true,
+            "sensitive": false,
+            "description": "滚动刻度，正数向上，负数向下",
+            "value_type": "int",
+            "default": -300
+          },
+          {
+            "name": "x",
+            "required": false,
+            "sensitive": false,
+            "description": "目标 x 坐标，不填表示当前位置",
+            "value_type": "int",
+            "default": 300
+          },
+          {
+            "name": "y",
+            "required": false,
+            "sensitive": false,
+            "description": "目标 y 坐标，不填表示当前位置",
+            "value_type": "int",
+            "default": 300
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.mouse_drag_to",
+      "component_key": "handle.mouse_action_component",
+      "description": "按住指定按键将鼠标拖拽到目标坐标。",
+      "input": {
+        "x": "int，目标 x 坐标",
+        "y": "int，目标 y 坐标",
+        "button": "str，可选，left/right/middle，默认 left",
+        "duration_seconds": "float，可选，拖拽耗时秒数，默认 0.2"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "x",
+            "required": true,
+            "sensitive": false,
+            "description": "目标 x 坐标",
+            "value_type": "int",
+            "default": 600
+          },
+          {
+            "name": "y",
+            "required": true,
+            "sensitive": false,
+            "description": "目标 y 坐标",
+            "value_type": "int",
+            "default": 400
+          },
+          {
+            "name": "button",
+            "required": false,
+            "sensitive": false,
+            "description": "鼠标按键：left/right/middle",
+            "value_type": "string",
+            "default": "left"
+          },
+          {
+            "name": "duration_seconds",
+            "required": false,
+            "sensitive": false,
+            "description": "拖拽耗时（秒）",
+            "value_type": "float",
+            "default": 0.2
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.get_mouse_position",
+      "component_key": "handle.mouse_action_component",
+      "description": "获取当前鼠标坐标位置。",
+      "input": {},
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": []
+      }
+    }
+  ],
+  "notes": [
+    "推荐通过 component.call_by_path 调用本模块函数。",
+    "新增函数时需同步维护本文件中的函数路径与说明。",
+    "新增能力需采用 component/<module>/<component_name> 目录模式。"
+  ]
+}

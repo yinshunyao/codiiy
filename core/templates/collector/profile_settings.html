@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}个人设置{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-settings {
+        grid-template-columns: 260px 1fr;
+    }
+    .settings-card {
+        max-width: 680px;
+    }
+    .profile-theme-row {
+        margin-top: 14px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .profile-theme-toggle {
+        position: relative;
+        width: 52px;
+        height: 28px;
+        display: inline-block;
+        cursor: pointer;
+    }
+    .profile-theme-toggle input {
+        position: absolute;
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    .profile-theme-slider {
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+    }
+    .profile-theme-slider::before {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 20px;
+        height: 20px;
+        border-radius: 999px;
+        background: var(--primary);
+        transition: transform 0.2s ease;
+    }
+    .profile-theme-toggle input:checked + .profile-theme-slider::before {
+        transform: translateX(24px);
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+<div class="app-shell app-shell-settings">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">个人设置</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'session_list' %}">返回对话页</a>
+            </div>
+        </div>
+
+        <section class="conversation">
+            <div class="chat-track">
+                <div class="panel settings-card">
+                    <h2 style="margin-top: 0;">账号</h2>
+                    <div class="meta" style="margin-top: 4px;">用户名：{{ request.user.username }}</div>
+                    <div style="margin-top: 12px;">
+                        <a class="chip" href="{% url 'password_change' %}">修改密码</a>
+                    </div>
+                </div>
+
+                <div class="panel settings-card">
+                    <h2 style="margin-top: 0;">界面主题</h2>
+                    <div class="meta" style="margin-top: 4px;">
+                        当前主题：{% if ui_theme == "light" %}亮色{% else %}暗色{% endif %}
+                    </div>
+                    <form method="post" action="{% url 'system_settings' %}" style="margin-top: 14px;">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{% url 'profile_settings' %}">
+                        <input type="hidden" name="ui_theme" id="profileThemeValue" value="{{ ui_theme|default:'dark' }}">
+                        <div class="profile-theme-row">
+                            <span class="meta" style="margin: 0;">暗色</span>
+                            <label class="profile-theme-toggle" for="profileThemeToggle">
+                                <input id="profileThemeToggle" type="checkbox" {% if ui_theme == "light" %}checked{% endif %}>
+                                <span class="profile-theme-slider"></span>
+                            </label>
+                            <span class="meta" style="margin: 0;">亮色</span>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="panel settings-card">
+                    <h2 style="margin-top: 0;">会话</h2>
+                    <div class="meta" style="margin-top: 4px;">退出登录后需要重新认证。</div>
+                    <form action="{% url 'logout' %}" method="post" style="margin-top: 12px;">
+                        {% csrf_token %}
+                        <button type="submit" class="ghost-btn">退出登录</button>
+                    </form>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<script>
+    function switchProject(projectId) {
+        if (projectId) {
+            window.location.href = `/projects/${projectId}/switch/`;
+        }
+    }
+    {% include "collector/partials/sidebar_menu_script.html" %}
+
+    (function () {
+        const toggle = document.getElementById("profileThemeToggle");
+        const valueInput = document.getElementById("profileThemeValue");
+        const form = valueInput ? valueInput.form : null;
+        if (!toggle || !valueInput || !form) {
+            return;
+        }
+        toggle.addEventListener("change", function () {
+            valueInput.value = toggle.checked ? "light" : "dark";
+            form.submit();
+        });
+    })();
+</script>
+{% endblock %}

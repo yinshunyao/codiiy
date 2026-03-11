@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}资源管理器{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-settings {
+        grid-template-columns: 260px 1fr;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+<div class="app-shell app-shell-settings">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">资源管理器</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right"></div>
+        </div>
+
+        <section class="conversation">
+            <div class="chat-track" style="max-width: 1080px;">
+                <div class="panel">
+                    <div class="meta" style="margin-top: 0;">项目根目录：{{ directory }}</div>
+                    <div class="meta">当前目录：/{{ current_rel_path|default:"" }}</div>
+                </div>
+
+                <div class="panel">
+                    <form method="get" style="display: flex; gap: 8px; margin-bottom: 12px;">
+                        <input type="hidden" name="path" value="{{ current_rel_path }}">
+                        <input
+                            type="text"
+                            name="q"
+                            value="{{ query_keyword }}"
+                            placeholder="按文件/目录名过滤"
+                            style="flex: 1; min-width: 220px;"
+                        >
+                        {% if preview_target %}
+                        <input type="hidden" name="target" value="{{ preview_target }}">
+                        {% endif %}
+                        <button type="submit" class="chip llm-chip-btn">查询</button>
+                    </form>
+                    <div style="display: flex; gap: 8px; margin-bottom: 10px; align-items: center;">
+                        {% if parent_rel_path or current_rel_path %}
+                        <a class="chip" href="?{% if parent_rel_path %}path={{ parent_rel_path|urlencode }}{% endif %}{% if query_keyword %}{% if parent_rel_path %}&{% endif %}q={{ query_keyword|urlencode }}{% endif %}">返回上级</a>
+                        {% endif %}
+                        <a class="chip" href="{% url 'requirement_file_list' %}">回到项目根目录</a>
+                    </div>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr>
+                                <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--line);">名称</th>
+                                <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--line);">类型</th>
+                                <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--line);">更新时间</th>
+                                <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--line);">文件大小</th>
+                                <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--line);">关联会话</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in entries %}
+                            <tr>
+                                <td style="padding: 8px; border-bottom: 1px solid var(--line);">
+                                    {% if item.is_dir %}
+                                    <a href="?path={{ item.rel_path|urlencode }}{% if query_keyword %}&q={{ query_keyword|urlencode }}{% endif %}">📁 {{ item.name }}</a>
+                                    {% else %}
+                                    <a href="?path={{ current_rel_path|urlencode }}&target={{ item.rel_path|urlencode }}{% if query_keyword %}&q={{ query_keyword|urlencode }}{% endif %}">📄 {{ item.name }}</a>
+                                    {% endif %}
+                                </td>
+                                <td style="padding: 8px; border-bottom: 1px solid var(--line);">
+                                    {% if item.is_dir %}目录{% else %}文件{% endif %}
+                                </td>
+                                <td style="padding: 8px; border-bottom: 1px solid var(--line);">{{ item.updated_at|date:"Y-m-d H:i" }}</td>
+                                <td style="padding: 8px; border-bottom: 1px solid var(--line);">{% if item.is_dir %}-{% else %}{{ item.size|filesizeformat }}{% endif %}</td>
+                                <td style="padding: 8px; border-bottom: 1px solid var(--line);">
+                                    {% if item.session_id %}
+                                    <a href="{% url 'session_detail' item.session_id %}">{{ item.session_title|default:"查看会话" }}</a>
+                                    {% else %}
+                                    <span class="meta" style="margin-top: 0;">无</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="5" style="padding: 12px; color: var(--muted);">当前目录暂无文件</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="panel">
+                    <div style="font-weight: 600; margin-bottom: 8px;">文件预览</div>
+                    {% if preview_error %}
+                    <div class="meta" style="color: #ff8f8f; margin-top: 0;">{{ preview_error }}</div>
+                    {% elif preview_target and preview_is_text %}
+                    <div class="meta" style="margin-top: 0; margin-bottom: 8px;">文件：{{ preview_target }}</div>
+                    {% if preview_is_editable %}
+                    <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="save_file">
+                        <input type="hidden" name="path" value="{{ current_rel_path }}">
+                        <input type="hidden" name="target" value="{{ preview_target }}">
+                        <input type="hidden" name="edit_target" value="{{ preview_target }}">
+                        <input type="hidden" name="q" value="{{ query_keyword }}">
+                        <div style="margin-bottom: 8px;">
+                            <button type="submit" class="chip llm-chip-btn">编辑并保存</button>
+                        </div>
+                        <textarea
+                            name="edit_content"
+                            style="width: 100%; min-height: 320px; box-sizing: border-box; line-height: 1.5;"
+                        >{{ preview_content }}</textarea>
+                    </form>
+                    {% else %}
+                    <pre style="margin: 0; white-space: pre-wrap; word-break: break-word; line-height: 1.5;">{{ preview_content }}</pre>
+                    {% endif %}
+                    {% else %}
+                    <div class="meta" style="margin-top: 0;">点击文件可在此处预览；文本类文件可直接编辑保存。</div>
+                    {% endif %}
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+<script>
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

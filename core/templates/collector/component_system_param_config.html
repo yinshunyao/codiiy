@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block title %}组件参数配置{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-control {
+        grid-template-columns: 260px 1fr;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+<div class="app-shell app-shell-control">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">模块：{{ control_module_name }}</span>
+                <span class="chip">组件：{{ component_key }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'control_function_list' control_active_module %}">返回组件功能页</a>
+            </div>
+        </div>
+
+        <section class="panel" style="margin-bottom: 12px;">
+            <div><strong>组件说明</strong></div>
+            <div class="meta" style="margin-top: 4px;">{{ component_description|default:"无描述" }}</div>
+            <div style="margin-top: 10px;">
+                <div class="meta">配置作用域：组件级（该组件下所有 API 共用同一套配置）</div>
+                <div class="meta" style="margin-top: 4px;">默认配置名：{{ default_config_name }}</div>
+            </div>
+        </section>
+
+        {% if schema_fields %}
+        <section class="panel" style="margin-bottom: 12px;">
+            <div><strong>组件参数配置</strong></div>
+            <form method="post" style="margin-top: 10px;">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_params">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr>
+                            <th style="text-align: left; border-bottom: 1px solid var(--line); padding: 8px;">配置项</th>
+                            <th style="text-align: left; border-bottom: 1px solid var(--line); padding: 8px;">配置值</th>
+                            <th style="text-align: left; border-bottom: 1px solid var(--line); padding: 8px;">说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in schema_rows %}
+                        <tr>
+                            <td style="padding: 8px; border-bottom: 1px solid var(--line); white-space: nowrap;">
+                                <code>{{ row.name }}</code>
+                                {% if row.required %}<span class="chip">必填</span>{% endif %}
+                                {% if row.sensitive %}<span class="chip">敏感</span>{% endif %}
+                            </td>
+                            <td style="padding: 8px; border-bottom: 1px solid var(--line);">
+                                <input
+                                    type="{% if row.sensitive %}password{% else %}text{% endif %}"
+                                    name="param__{{ row.name }}"
+                                    value="{{ row.value }}"
+                                    {% if row.required %}required{% endif %}
+                                    style="width: 100%;"
+                                >
+                            </td>
+                            <td style="padding: 8px; border-bottom: 1px solid var(--line);">
+                                <span class="meta">{{ row.description|default:"-" }}</span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <button type="submit">保存配置</button>
+            </form>
+            <div class="meta" style="margin-top: 8px;">
+                配置项名称由 Schema 自动生成，用户仅需填写配置值。
+            </div>
+        </section>
+        {% endif %}
+
+        {% if permission_schema_enabled %}
+        <section class="panel" style="margin-bottom: 12px;">
+            <div><strong>系统权限配置</strong></div>
+            {% if not permission_storage_ready %}
+            <div class="meta" style="margin-top: 8px;">
+                系统权限确认表未初始化，请先执行：<code>python core/manage.py migrate</code>
+            </div>
+            {% endif %}
+            <form method="post" style="margin-top: 10px;">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_permissions">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr>
+                            <th style="text-align: left; border-bottom: 1px solid var(--line); padding: 8px;">权限项</th>
+                            <th style="text-align: left; border-bottom: 1px solid var(--line); padding: 8px;">已授予</th>
+                            <th style="text-align: left; border-bottom: 1px solid var(--line); padding: 8px;">说明与指引</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in permission_rows %}
+                        <tr>
+                            <td style="padding: 8px; border-bottom: 1px solid var(--line); white-space: nowrap;">
+                                <code>{{ row.key }}</code>
+                                {% if row.required %}<span class="chip">必需</span>{% endif %}
+                                <div class="meta" style="margin-top: 4px;">{{ row.name }}</div>
+                            </td>
+                            <td style="padding: 8px; border-bottom: 1px solid var(--line);">
+                                <label style="display: inline-flex; align-items: center; gap: 8px; margin: 0;">
+                                    <input type="checkbox" name="perm__{{ row.key }}" {% if row.granted %}checked{% endif %}>
+                                    <span>已授予</span>
+                                </label>
+                            </td>
+                            <td style="padding: 8px; border-bottom: 1px solid var(--line);">
+                                <div class="meta">{{ row.description|default:"-" }}</div>
+                                {% if row.grant_guide %}
+                                <div class="meta" style="margin-top: 4px;">指引：{{ row.grant_guide }}</div>
+                                {% endif %}
+                                {% if row.grant_url %}
+                                <div class="meta" style="margin-top: 4px;"><a href="{{ row.grant_url }}" target="_blank" rel="noopener">查看授权说明</a></div>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <button type="submit">保存权限状态</button>
+            </form>
+            <div class="meta" style="margin-top: 8px;">
+                注意：该页面仅记录权限确认状态并提供指引，不会直接修改系统权限。
+            </div>
+        </section>
+        {% endif %}
+
+        {% if schema_fields %}
+        <section class="panel">
+            <div><strong>当前生效配置</strong></div>
+            <div style="margin-top: 10px;">
+                {% if current_config %}
+                    <div style="border: 1px solid var(--line); border-radius: 10px; padding: 10px;">
+                        <div class="meta">配置名：{{ current_config.config_name }}</div>
+                        <pre style="margin: 8px 0 0; white-space: pre-wrap;">{{ current_config.params|default:"{}" }}</pre>
+                    </div>
+                {% else %}
+                    <div class="meta">暂无配置，保存后将生成默认配置。</div>
+                {% endif %}
+            </div>
+        </section>
+        {% endif %}
+    </main>
+</div>
+
+<script>
+    function switchProject(projectId) {
+        if (projectId) {
+            window.location.href = `/projects/${projectId}/switch/`;
+        }
+    }
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

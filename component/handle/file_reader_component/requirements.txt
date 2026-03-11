@@ -1,0 +1,1 @@
+# file_reader_component 使用 Python 标准库，无额外依赖

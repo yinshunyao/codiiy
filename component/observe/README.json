@@ -1,0 +1,167 @@
+{
+  "directory": "component/observe",
+  "description": "屏幕观察与理解模块，采用组件目录标准，提供截图、图像理解、实时屏幕理解能力。",
+  "components": [
+    {
+      "component_key": "observe.screen_capture_component",
+      "component_dir": "component/observe/screen_capture_component",
+      "description": "屏幕截图组件，负责截图、保存与图片加载。",
+      "default_enabled": true,
+      "system_param_schema": {
+        "enabled": false,
+        "fields": []
+      },
+      "system_permission_schema": {
+        "enabled": true,
+        "permissions": [
+          {
+            "key": "macos.screen_recording",
+            "name": "macOS 屏幕录制权限",
+            "required": true,
+            "description": "截图能力依赖系统屏幕录制权限授权。",
+            "grant_guide": "系统设置 -> 隐私与安全性 -> 屏幕录制，为 Python/终端应用开启授权。",
+            "grant_url": ""
+          }
+        ]
+      }
+    },
+    {
+      "component_key": "observe.screen_understand_component",
+      "component_dir": "component/observe/screen_understand_component",
+      "description": "屏幕理解组件，负责图像语义理解与结构化输出。",
+      "default_enabled": true,
+      "system_param_schema": {
+        "enabled": false,
+        "fields": []
+      }
+    }
+  ],
+  "functions": [
+    {
+      "path": "component.observe.capture_screen_to_file",
+      "component_key": "observe.screen_capture_component",
+      "description": "截取当前屏幕并保存为 PNG 文件，返回图片绝对路径。",
+      "input": {
+        "output_path": "str，可选，指定输出文件路径",
+        "output_dir": "str，可选，输出目录，默认 component/observe/data",
+        "region": "tuple[int,int,int,int]，可选，截图区域(left,top,width,height)"
+      },
+      "output": "str，截图文件绝对路径",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "output_path",
+            "required": false,
+            "sensitive": false,
+            "description": "输出文件绝对路径，留空时自动生成",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "output_dir",
+            "required": false,
+            "sensitive": false,
+            "description": "输出目录",
+            "value_type": "string",
+            "default": "component/observe/data"
+          },
+          {
+            "name": "region",
+            "required": false,
+            "sensitive": false,
+            "description": "截图区域，JSON 数组格式 [left, top, width, height]",
+            "value_type": "json",
+            "default": ""
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.observe.understand_image",
+      "component_key": "observe.screen_understand_component",
+      "description": "理解指定图片（路径或图像对象），输出文本或 JSON 结构。",
+      "input": {
+        "image": "str 或 PIL.Image",
+        "prompt": "str，可选，理解提示词",
+        "json_mode": "bool，可选，是否返回结构化结果",
+        "config": "VLLMConfig，可选，本地 vLLM 配置"
+      },
+      "output": "str 或 dict",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "image",
+            "required": true,
+            "sensitive": false,
+            "description": "图片路径（测试页仅支持路径字符串）",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "prompt",
+            "required": false,
+            "sensitive": false,
+            "description": "理解提示词，留空使用组件默认提示词",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "json_mode",
+            "required": false,
+            "sensitive": false,
+            "description": "是否返回 JSON 结构化结果",
+            "value_type": "bool",
+            "default": true
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.observe.understand_current_screen",
+      "component_key": "observe.screen_understand_component",
+      "description": "实时截图后直接理解当前屏幕内容。",
+      "input": {
+        "prompt": "str，可选，理解提示词",
+        "region": "tuple[int,int,int,int]，可选，截图区域",
+        "json_mode": "bool，可选，是否返回结构化结果",
+        "config": "VLLMConfig，可选，本地 vLLM 配置"
+      },
+      "output": "str 或 dict",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "prompt",
+            "required": false,
+            "sensitive": false,
+            "description": "理解提示词，留空使用组件默认提示词",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "region",
+            "required": false,
+            "sensitive": false,
+            "description": "截图区域，JSON 数组格式 [left, top, width, height]",
+            "value_type": "json",
+            "default": ""
+          },
+          {
+            "name": "json_mode",
+            "required": false,
+            "sensitive": false,
+            "description": "是否返回 JSON 结构化结果",
+            "value_type": "bool",
+            "default": true
+          }
+        ]
+      }
+    }
+  ],
+  "notes": [
+    "调用前需确保本地 vLLM 服务可用。",
+    "推荐通过 component.call_by_path 进行字符串路径调用。"
+  ]
+}

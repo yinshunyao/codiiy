@@ -1,0 +1,29 @@
+(function () {
+    const menuSections = document.querySelectorAll("[data-menu-section]");
+    menuSections.forEach((section) => {
+        const toggle = section.querySelector("[data-menu-toggle]");
+        const mark = section.querySelector(".menu-toggle-mark");
+        if (!toggle) {
+            return;
+        }
+        toggle.addEventListener("click", () => {
+            section.classList.toggle("is-open");
+            if (mark) {
+                mark.textContent = section.classList.contains("is-open") ? "-" : "+";
+            }
+        });
+    });
+})();
+
+(function () {
+    const form = document.querySelector(".user-theme-form");
+    const toggle = form ? form.querySelector(".js-sidebar-theme-toggle") : null;
+    const valueInput = form ? form.querySelector(".js-sidebar-theme-value") : null;
+    if (!form || !toggle || !valueInput) {
+        return;
+    }
+    toggle.addEventListener("change", function () {
+        valueInput.value = toggle.checked ? "light" : "dark";
+        form.submit();
+    });
+})();

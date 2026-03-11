@@ -1,0 +1,282 @@
+{
+  "directory": "component/communicate",
+  "description": "三方通信模块，提供钉钉、企业微信、飞书消息发送能力。",
+  "components": [
+    {
+      "component_key": "communicate.dingtalk_component",
+      "component_dir": "component/communicate/dingtalk_component",
+      "description": "钉钉机器人文本消息发送组件。",
+      "default_enabled": true,
+      "system_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "webhook_url",
+            "required": true,
+            "sensitive": true,
+            "description": "钉钉机器人 Webhook 地址"
+          },
+          {
+            "name": "secret",
+            "required": false,
+            "sensitive": true,
+            "description": "钉钉加签密钥，启用签名时填写"
+          }
+        ]
+      },
+      "required_config_fields": ["webhook_url"],
+      "optional_config_fields": ["secret"]
+    },
+    {
+      "component_key": "communicate.wecom_component",
+      "component_dir": "component/communicate/wecom_component",
+      "description": "企业微信机器人文本消息发送组件。",
+      "default_enabled": true,
+      "system_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "webhook_url",
+            "required": true,
+            "sensitive": true,
+            "description": "企业微信机器人 Webhook 地址"
+          }
+        ]
+      },
+      "required_config_fields": ["webhook_url"],
+      "optional_config_fields": []
+    },
+    {
+      "component_key": "communicate.feishu_component",
+      "component_dir": "component/communicate/feishu_component",
+      "description": "飞书机器人文本消息发送组件。",
+      "default_enabled": true,
+      "system_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "webhook_url",
+            "required": true,
+            "sensitive": true,
+            "description": "飞书机器人 Webhook 地址"
+          },
+          {
+            "name": "secret",
+            "required": false,
+            "sensitive": true,
+            "description": "飞书签名密钥，启用签名时填写"
+          }
+        ]
+      },
+      "required_config_fields": ["webhook_url"],
+      "optional_config_fields": ["secret"]
+    }
+  ],
+  "functions": [
+    {
+      "path": "component.communicate.send_dingtalk_text",
+      "component_key": "communicate.dingtalk_component",
+      "description": "发送钉钉文本消息，支持显式传参或按配置名读取 Django 数据库配置。",
+      "input": {
+        "text": "str，消息文本",
+        "config_name": "str，可选，配置名；若提供则按 dingtalk + 配置名读取数据库配置",
+        "webhook_url": "str，可选，Webhook 地址（优先级高于数据库配置）",
+        "secret": "str，可选，签名密钥（用于加签）",
+        "at_mobiles": "list[str]，可选，@手机号列表",
+        "is_at_all": "bool，可选，是否 @所有人，默认 false",
+        "timeout_seconds": "int，可选，请求超时秒数，默认 10"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "text",
+            "required": true,
+            "sensitive": false,
+            "description": "发送文本内容",
+            "value_type": "string",
+            "default": "demo: dingtalk message"
+          },
+          {
+            "name": "config_name",
+            "required": false,
+            "sensitive": false,
+            "description": "组件配置名，默认 default",
+            "value_type": "string",
+            "default": "default"
+          },
+          {
+            "name": "webhook_url",
+            "required": false,
+            "sensitive": true,
+            "description": "显式 webhook，留空时走组件配置",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "secret",
+            "required": false,
+            "sensitive": true,
+            "description": "显式签名密钥，留空时走组件配置",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "at_mobiles",
+            "required": false,
+            "sensitive": false,
+            "description": "@手机号列表，JSON 数组格式",
+            "value_type": "json",
+            "default": "[]"
+          },
+          {
+            "name": "is_at_all",
+            "required": false,
+            "sensitive": false,
+            "description": "是否 @所有人",
+            "value_type": "bool",
+            "default": false
+          },
+          {
+            "name": "timeout_seconds",
+            "required": false,
+            "sensitive": false,
+            "description": "请求超时秒数",
+            "value_type": "int",
+            "default": 10
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.communicate.send_wecom_text",
+      "component_key": "communicate.wecom_component",
+      "description": "发送企业微信文本消息，支持显式传参或按配置名读取 Django 数据库配置。",
+      "input": {
+        "text": "str，消息文本",
+        "config_name": "str，可选，配置名；若提供则按 wecom + 配置名读取数据库配置",
+        "webhook_url": "str，可选，Webhook 地址（优先级高于数据库配置）",
+        "mentioned_list": "list[str]，可选，@成员账号列表",
+        "mentioned_mobile_list": "list[str]，可选，@手机号列表",
+        "timeout_seconds": "int，可选，请求超时秒数，默认 10"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "text",
+            "required": true,
+            "sensitive": false,
+            "description": "发送文本内容",
+            "value_type": "string",
+            "default": "demo: wecom message"
+          },
+          {
+            "name": "config_name",
+            "required": false,
+            "sensitive": false,
+            "description": "组件配置名，默认 default",
+            "value_type": "string",
+            "default": "default"
+          },
+          {
+            "name": "webhook_url",
+            "required": false,
+            "sensitive": true,
+            "description": "显式 webhook，留空时走组件配置",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "mentioned_list",
+            "required": false,
+            "sensitive": false,
+            "description": "@成员账号列表，JSON 数组格式",
+            "value_type": "json",
+            "default": "[]"
+          },
+          {
+            "name": "mentioned_mobile_list",
+            "required": false,
+            "sensitive": false,
+            "description": "@手机号列表，JSON 数组格式",
+            "value_type": "json",
+            "default": "[]"
+          },
+          {
+            "name": "timeout_seconds",
+            "required": false,
+            "sensitive": false,
+            "description": "请求超时秒数",
+            "value_type": "int",
+            "default": 10
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.communicate.send_feishu_text",
+      "component_key": "communicate.feishu_component",
+      "description": "发送飞书文本消息，支持显式传参或按配置名读取 Django 数据库配置。",
+      "input": {
+        "text": "str，消息文本",
+        "config_name": "str，可选，配置名；若提供则按 feishu + 配置名读取数据库配置",
+        "webhook_url": "str，可选，Webhook 地址（优先级高于数据库配置）",
+        "secret": "str，可选，签名密钥（用于加签）",
+        "timeout_seconds": "int，可选，请求超时秒数，默认 10"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "text",
+            "required": true,
+            "sensitive": false,
+            "description": "发送文本内容",
+            "value_type": "string",
+            "default": "demo: feishu message"
+          },
+          {
+            "name": "config_name",
+            "required": false,
+            "sensitive": false,
+            "description": "组件配置名，默认 default",
+            "value_type": "string",
+            "default": "default"
+          },
+          {
+            "name": "webhook_url",
+            "required": false,
+            "sensitive": true,
+            "description": "显式 webhook，留空时走组件配置",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "secret",
+            "required": false,
+            "sensitive": true,
+            "description": "显式签名密钥，留空时走组件配置",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "timeout_seconds",
+            "required": false,
+            "sensitive": false,
+            "description": "请求超时秒数",
+            "value_type": "int",
+            "default": 10
+          }
+        ]
+      }
+    }
+  ],
+  "notes": [
+    "通信参数优先使用函数显式传参；显式参数缺失时可通过 config_name 从 Django 数据库读取。",
+    "请在 Django Admin 的通信配置模型中维护 key/secret/webhook 等敏感参数，避免写入仓库配置文件。"
+  ]
+}

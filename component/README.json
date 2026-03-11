@@ -1,0 +1,111 @@
+{
+  "directory": "component",
+  "description": "组件层统一入口（目录名为 component），负责对各子模块能力进行组织与路由。",
+  "functions": [
+    {
+      "path": "component.call_by_path",
+      "description": "通过字符串函数路径调用 component 下的函数，调用前会执行组件启停校验。",
+      "input": {
+        "function_path": "str，必须以 component. 开头，例如 component.observe.understand_current_screen",
+        "kwargs": "dict，可选，目标函数参数"
+      },
+      "output": "Any，目标函数返回值"
+    },
+    {
+      "path": "component.resolve_function",
+      "description": "解析字符串函数路径并返回可调用函数对象。",
+      "input": {
+        "function_path": "str，函数路径"
+      },
+      "output": "callable"
+    },
+    {
+      "path": "component.list_components",
+      "description": "返回组件层已注册组件清单及当前启停状态。",
+      "input": {},
+      "output": "list[dict]"
+    },
+    {
+      "path": "component.get_component_enabled",
+      "description": "查询指定组件当前是否启用。",
+      "input": {
+        "component_key": "str，组件唯一标识"
+      },
+      "output": "bool"
+    },
+    {
+      "path": "component.set_component_enabled",
+      "description": "设置组件启用或停用状态。",
+      "input": {
+        "component_key": "str，组件唯一标识",
+        "enabled": "bool，True 启用，False 停用"
+      },
+      "output": "dict，包含 component_key 和 enabled"
+    }
+  ],
+  "subdirectories": [
+    "component/observe",
+    "component/handle",
+    "component/communicate",
+    "component/decide"
+  ],
+  "component_registry": {
+    "index_file": "component/component_index.json",
+    "state_file": "component/component_state.json",
+    "description": "组件注册索引、函数到组件映射与运行时启停状态；组件目录采用 component/<module>/<component_name>。"
+  },
+  "upgrade_compatibility": {
+    "policy": "不提供隐式旧路径别名兼容，仅支持 README.json 与 component_index.json 登记的规范函数路径。",
+    "fallback_policy": "未纳入 function_to_component 的路径按原生解析处理，但不提供额外别名映射。"
+  },
+  "tool_rules": {
+    "dependency_import_name_map": {
+      "pillow": "PIL"
+    },
+    "dependency_resolution_policy": "调用工具必须根据 function_path 映射到组件目录，并从对应组件的 requirements.txt 按需检查依赖；调用工具目录不维护独立 requirements.txt。",
+    "description": "工具在检查组件 requirements 依赖时，若包名与 import 名不一致，需优先使用此映射。tool 不再维护独立映射配置。"
+  },
+  "demo_rules": {
+    "ownership": "外层目录不再维护聚合 demo，demo 由各组件在自身目录内独立实现。",
+    "import_policy": "可直接执行的 demo 文件必须使用绝对导入路径，避免相对导入导致直接执行失败。",
+    "api_param_policy": "demo 参数默认归属 API 级参数，不与系统参数混用；系统参数优先通过组件配置页维护。"
+  },
+  "system_param_rules": {
+    "scope": "系统参数配置作用域为组件级（component_key），同一组件下全部 API 共享同一套参数。",
+    "ui_policy": "配置页面需基于 system_param_schema.fields 自动生成“配置项/配置值”表格；配置项名称与必填属性从 Schema 读取，用户仅填写配置值。",
+    "default_config_name": "default",
+    "description": "当前阶段组件参数配置采用单配置策略：每个组件仅维护一条默认配置记录。"
+  },
+  "system_permission_rules": {
+    "scope": "系统权限配置作用域为组件级（component_key），用于声明 OS 权限或运行环境权限需求。",
+    "schema_policy": "组件在 README.json 的 components 中通过 system_permission_schema 声明权限清单；字段包含 key/name/required/description/grant_guide/grant_url。",
+    "ui_policy": "组件配置页面展示权限状态与授予指引，用户可勾选“已授予”进行确认保存。",
+    "runtime_policy": "测试页执行前校验 required=true 的权限是否已确认，未确认则拒绝执行并提示配置入口。",
+    "boundary_policy": "Django 页面仅做权限声明、状态记录与指引，不直接进行系统提权。"
+  },
+  "api_param_rules": {
+    "parameter_layering": [
+      "组件参数统一分为两层，禁止混用：",
+      "**系统参数（System Params）**：组件级共享参数，例如 `api_key`、`webhook_url`、`secret`。",
+      "**API 参数（API Params）**：单次 API 调用参数，例如 `text`、`prompt`、`model`、`json_mode`。"
+    ],
+    "api_param_policy": [
+      "每个 API 必须声明 `demo_param_schema`，字段结构参考 `system_param_schema.fields`，并增加 `value_type`：",
+      "允许值：`string` / `int` / `float` / `bool` / `json`。",
+      "demo 参数默认归属 API 级参数，不落库，不写入系统参数配置。",
+      "测试页按 `demo_param_schema` 自动渲染输入项并执行类型转换、必填校验。"
+    ],
+    "function_signature_compatibility": [
+      "测试页会对“非必填且留空”的参数不传值。",
+      "因此：凡在 `demo_param_schema` 中为非必填的参数，函数签名必须可省略（提供默认值），避免 `missing required positional argument`。",
+      "运行时必填约束应通过业务校验返回清晰错误，而不是依赖 Python 签名异常。"
+    ],
+    "demo_runner_policy": [
+      "组件功能页中的 API 应提供“测试 API”入口。",
+      "测试页统一通过 `component.call_by_path(function_path, kwargs)` 执行调用。",
+      "页面需展示：组件信息与 API 路径。",
+      "页面需展示：系统参数配置入口（若该组件启用系统参数）。",
+      "页面需展示：本次调用入参与测试结果（结构化 JSON，结果区可滚动）。"
+    ]
+  }
+}
