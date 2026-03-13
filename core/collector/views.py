@@ -1,7 +1,8 @@
 import os
-import sys
 import io
 import json
+import platform
+import re
 import zipfile
 import threading
 from datetime import datetime
@@ -19,6 +20,9 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils import timezone
+
+from tools.component_call_tool import ComponentCallTool
+from agents.helm.requirement_session_command import RequirementSessionCommand
 
 from .forms import ChatMessageForm, ProjectForm
 from django.http import HttpResponse, JsonResponse
@@ -59,6 +63,10 @@ ALLOWED_CONTROL_MODULES = {
     "decide": "决策",
     "handle": "操作",
 }
+ALLOWED_AGENT_MODULES = {
+    "mindforge": "心法",
+    "helm": "号令",
+}
 
 THEME_DARK = "dark"
 THEME_LIGHT = "light"
@@ -68,39 +76,95 @@ THEME_LABELS = {
 }
 DEFAULT_UI_THEME = THEME_DARK
 DEFAULT_COMPONENT_CONFIG_NAME = "default"
-
-# 添加仓库根路径以使用 component 模块
-current_dir = os.path.dirname(os.path.abspath(__file__))
-repo_root_path = os.path.abspath(os.path.join(current_dir, "..", ".."))
-if repo_root_path not in sys.path:
-    sys.path.insert(0, repo_root_path)
-
-try:
-    from component.handle import read_file as component_read_file
-except ImportError:
-    component_read_file = None
+OS_FILTER_ALL = "all"
+SUPPORTED_SYSTEM_KEYS = ("macos", "linux", "windows")
+OS_LABELS = {
+    OS_FILTER_ALL: "全部系统",
+    "macos": "macOS",
+    "linux": "Linux",
+    "windows": "Windows",
+}
 
 try:
-    from component import call_by_path as component_call_by_path
-except ImportError:
-    component_call_by_path = None
-
-try:
-    from component import get_component_enabled as component_get_component_enabled
-    from component import set_component_enabled as component_set_component_enabled
-except ImportError:
-    component_get_component_enabled = None
-    component_set_component_enabled = None
-
-# 添加 tools 路径以使用 rule_reader
-rule_reader_tools_path = os.path.abspath(os.path.join(current_dir, '..', '..', 'tools', 'rule_reader'))
-if rule_reader_tools_path not in sys.path:
-    sys.path.insert(0, rule_reader_tools_path)
-
-try:
-    from rule_reader import RuleReader
+    from tools.rule_reader import RuleReader
 except ImportError:
     RuleReader = None
+
+component_call_tool = ComponentCallTool(auto_install=False)
+requirement_session_command = RequirementSessionCommand()
+
+
+def _get_current_runtime_os():
+    system = (platform.system() or "").strip().lower()
+    if system == "darwin":
+        return "macos"
+    if system == "windows":
+        return "windows"
+    if system == "linux":
+        return "linux"
+    return "linux"
+
+
+def _normalize_supported_systems(raw_value):
+    alias_map = {
+        "mac": "macos",
+        "macos": "macos",
+        "darwin": "macos",
+        "osx": "macos",
+        "linux": "linux",
+        "windows": "windows",
+        "win": "windows",
+        "win32": "windows",
+        "win64": "windows",
+    }
+    all_aliases = {"all", "any", "*", "全部"}
+    tokens = []
+    if isinstance(raw_value, list):
+        tokens = [str(item).strip().lower() for item in raw_value]
+    elif isinstance(raw_value, str):
+        split_tokens = re.split(r"[\s,，、;/|]+", raw_value.strip().lower())
+        tokens = [token for token in split_tokens if token]
+
+    normalized = []
+    for token in tokens:
+        if token in all_aliases:
+            return list(SUPPORTED_SYSTEM_KEYS)
+        mapped = alias_map.get(token)
+        if mapped and mapped not in normalized:
+            normalized.append(mapped)
+    if not normalized:
+        return list(SUPPORTED_SYSTEM_KEYS)
+    return normalized
+
+
+def _format_supported_systems_text(supported_systems):
+    labels = []
+    for key in supported_systems:
+        if key in OS_LABELS and key not in labels:
+            labels.append(OS_LABELS[key])
+    return " / ".join(labels) if labels else OS_LABELS[OS_FILTER_ALL]
+
+
+def _normalize_os_filter(raw_value, default_value):
+    candidate = str(raw_value or "").strip().lower()
+    if candidate == OS_FILTER_ALL:
+        return OS_FILTER_ALL
+    if candidate in SUPPORTED_SYSTEM_KEYS:
+        return candidate
+    return default_value
+
+
+def _is_os_match(supported_systems, selected_os):
+    if selected_os == OS_FILTER_ALL:
+        return True
+    return selected_os in (supported_systems or [])
+
+
+def _build_os_options():
+    options = [{"value": OS_FILTER_ALL, "label": OS_LABELS[OS_FILTER_ALL]}]
+    for key in SUPPORTED_SYSTEM_KEYS:
+        options.append({"value": key, "label": OS_LABELS[key]})
+    return options
 
 
 def home(request):
@@ -326,6 +390,8 @@ def _build_chat_context(request, active_session=None, message_form=None):
         "rollback_draft": rollback_draft,
         "control_modules": ALLOWED_CONTROL_MODULES,
         "control_active_module": None,
+        "agent_modules": ALLOWED_AGENT_MODULES,
+        "agent_active_module": None,
         "current_nav": "chat",
         "ui_theme": _get_ui_theme(request),
         "ui_theme_options": THEME_LABELS,
@@ -340,6 +406,310 @@ def _get_control_module_dir(module_name: str) -> Path:
     if module_name not in ALLOWED_CONTROL_MODULES:
         raise ValueError(f"不支持的组件模块: {module_name}")
     return _get_control_root() / module_name
+
+
+def _get_tools_root() -> Path:
+    return Path(Project.get_core_project_path()) / "tools"
+
+
+def _get_agents_root() -> Path:
+    return Path(Project.get_core_project_path()) / "agents"
+
+
+def _get_agent_module_dir(module_name: str) -> Path:
+    if module_name not in ALLOWED_AGENT_MODULES:
+        raise ValueError(f"不支持的智能体模块: {module_name}")
+    return _get_agents_root() / module_name
+
+
+def _get_cursor_root() -> Path:
+    return Path(Project.get_core_project_path()) / ".cursor"
+
+
+def _get_skills_root() -> Path:
+    return _get_cursor_root() / "skills"
+
+
+def _read_toolset_readme_summary(readme_path: Path) -> str:
+    if not readme_path.exists():
+        return "未找到 README.md"
+    try:
+        with open(readme_path, "r", encoding="utf-8") as fp:
+            for raw_line in fp:
+                line = str(raw_line).strip()
+                if not line:
+                    continue
+                if line.startswith("#"):
+                    continue
+                return line[:160]
+    except OSError:
+        return "README.md 读取失败"
+    return "README.md 暂无摘要内容"
+
+
+def _read_toolset_os_support(readme_path: Path):
+    if not readme_path.exists():
+        return list(SUPPORTED_SYSTEM_KEYS)
+    try:
+        text = readme_path.read_text(encoding="utf-8")
+    except OSError:
+        return list(SUPPORTED_SYSTEM_KEYS)
+    match = re.search(r"支持操作系统\s*[:：]\s*([^\r\n]+)", text, flags=re.IGNORECASE)
+    if not match:
+        return list(SUPPORTED_SYSTEM_KEYS)
+    return _normalize_supported_systems(match.group(1))
+
+
+def _list_toolset_items(keyword: str, selected_os: str = OS_FILTER_ALL):
+    tools_root = _get_tools_root()
+    normalized_keyword = str(keyword or "").strip().lower()
+    if not tools_root.exists() or not tools_root.is_dir():
+        return []
+
+    items = []
+    for entry in sorted(tools_root.iterdir(), key=lambda x: x.name.lower()):
+        if not entry.is_dir():
+            continue
+        if entry.name.startswith(".") or entry.name.startswith("__"):
+            continue
+        if normalized_keyword and normalized_keyword not in entry.name.lower():
+            continue
+
+        readme_path = entry / "README.md"
+        os_support = _read_toolset_os_support(readme_path)
+        if not _is_os_match(os_support, selected_os):
+            continue
+        py_files = sorted(
+            [item.name for item in entry.iterdir() if item.is_file() and item.suffix == ".py"]
+        )
+        rel_dir = entry.relative_to(Project.get_core_project_path()).as_posix()
+        summary = _read_toolset_readme_summary(readme_path)
+        item = {
+            "name": entry.name,
+            "directory": rel_dir,
+            "readme_exists": readme_path.exists(),
+            "summary": summary,
+            "python_files": py_files,
+            "updated_at": datetime.fromtimestamp(entry.stat().st_mtime),
+            "os_support": os_support,
+            "os_support_text": _format_supported_systems_text(os_support),
+        }
+        items.append(item)
+    return items
+
+
+def _read_text_file_summary(file_path: Path, default_text: str, max_length: int = 160) -> str:
+    if not file_path.exists():
+        return default_text
+    try:
+        with open(file_path, "r", encoding="utf-8") as fp:
+            lines = [str(line).rstrip("\n") for line in fp]
+    except OSError:
+        return f"{file_path.name} 读取失败"
+
+    # 优先读取 Markdown 文档中的 description 字段。
+    if file_path.suffix.lower() == ".md":
+        for raw_line in lines[:120]:
+            line = str(raw_line).strip()
+            if not line:
+                continue
+            match = re.match(r"^description\s*[:：]\s*(.+?)\s*$", line, flags=re.IGNORECASE)
+            if not match:
+                continue
+            description = match.group(1).strip()
+            if (
+                len(description) >= 2
+                and description[0] in {"'", '"'}
+                and description[-1] == description[0]
+            ):
+                description = description[1:-1].strip()
+            if description:
+                return description[:max_length]
+
+    for raw_line in lines:
+        line = str(raw_line).strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            continue
+        return line[:max_length]
+    return f"{file_path.name} 暂无摘要内容"
+
+
+def _is_hidden_path(path_obj: Path) -> bool:
+    return any(part.startswith(".") for part in path_obj.parts)
+
+
+def _list_system_skill_items(keyword: str):
+    skills_root = _get_skills_root()
+    normalized_keyword = str(keyword or "").strip().lower()
+    if not skills_root.exists() or not skills_root.is_dir():
+        return []
+
+    items = []
+    for entry in sorted(skills_root.iterdir(), key=lambda x: x.name.lower()):
+        if not entry.is_dir():
+            continue
+        if entry.name.startswith(".") or entry.name.startswith("__"):
+            continue
+
+        readme_path = entry / "SKILL.md"
+        rel_dir = entry.relative_to(Project.get_core_project_path()).as_posix()
+        summary = _read_text_file_summary(readme_path, "未找到 SKILL.md")
+        key_files = sorted(
+            [
+                item.name
+                for item in entry.iterdir()
+                if item.is_file() and not item.name.startswith(".")
+            ]
+        )
+        searchable_text = f"{entry.name} {rel_dir} {summary}".lower()
+        if normalized_keyword and normalized_keyword not in searchable_text:
+            continue
+        items.append(
+            {
+                "name": entry.name,
+                "directory": rel_dir,
+                "skill_file_exists": readme_path.exists(),
+                "summary": summary,
+                "key_files": key_files,
+                "updated_at": datetime.fromtimestamp(entry.stat().st_mtime),
+            }
+        )
+    return items
+
+
+def _list_agent_items(module_name: str, keyword: str):
+    module_dir = _get_agent_module_dir(module_name)
+    normalized_keyword = str(keyword or "").strip().lower()
+    if not module_dir.exists() or not module_dir.is_dir():
+        return []
+
+    items = []
+    for entry in sorted(module_dir.iterdir(), key=lambda x: x.name.lower()):
+        if not entry.is_dir():
+            continue
+        if entry.name.startswith(".") or entry.name.startswith("__"):
+            continue
+
+        readme_path = entry / "README.md"
+        rel_dir = entry.relative_to(Project.get_core_project_path()).as_posix()
+        summary = _read_text_file_summary(readme_path, "未找到 README.md")
+        key_files = sorted(
+            [
+                item.name
+                for item in entry.iterdir()
+                if item.is_file() and not item.name.startswith(".")
+            ]
+        )
+        searchable_text = f"{entry.name} {rel_dir} {summary}".lower()
+        if normalized_keyword and normalized_keyword not in searchable_text:
+            continue
+        items.append(
+            {
+                "name": entry.name,
+                "directory": rel_dir,
+                "readme_exists": readme_path.exists(),
+                "summary": summary,
+                "key_files": key_files,
+                "updated_at": datetime.fromtimestamp(entry.stat().st_mtime),
+            }
+        )
+    return items
+
+
+def _resolve_agent_item_dir(module_name: str, item_name: str):
+    try:
+        module_dir = _get_agent_module_dir(module_name).resolve()
+    except ValueError as exc:
+        return "", None, str(exc)
+    if not module_dir.exists() or not module_dir.is_dir():
+        return "", None, "智能体模块目录不存在。"
+
+    normalized = str(item_name or "").strip().replace("\\", "/").strip("/")
+    if not normalized or "/" in normalized or normalized in {".", ".."}:
+        return "", None, "智能体项名称不合法。"
+
+    target_dir = (module_dir / normalized).resolve()
+    if target_dir != module_dir and not str(target_dir).startswith(f"{module_dir}{os.sep}"):
+        return normalized, None, "智能体项路径超出允许范围。"
+    if not target_dir.exists() or not target_dir.is_dir():
+        return normalized, None, "智能体项目录不存在。"
+    return normalized, target_dir, ""
+
+
+def _list_system_rule_items(keyword: str):
+    rules_root = _get_cursor_root() / "rules"
+    normalized_keyword = str(keyword or "").strip().lower()
+    if not rules_root.exists() or not rules_root.is_dir():
+        return []
+
+    items = []
+    for entry in sorted(rules_root.rglob("*"), key=lambda x: x.as_posix().lower()):
+        if not entry.is_file():
+            continue
+        rel_path_obj = entry.relative_to(rules_root)
+        if _is_hidden_path(rel_path_obj):
+            continue
+        rel_path_obj = entry.relative_to(rules_root)
+        rel_path = rel_path_obj.as_posix()
+        display_path = (Path(".cursor") / "rules" / rel_path_obj).as_posix()
+        summary = _read_text_file_summary(entry, f"{entry.name} 暂无摘要内容")
+        searchable_text = f"{entry.name} {display_path} {summary}".lower()
+        if normalized_keyword and normalized_keyword not in searchable_text:
+            continue
+        items.append(
+            {
+                "name": entry.name,
+                "path": display_path,
+                "detail_path": rel_path,
+                "summary": summary,
+                "updated_at": datetime.fromtimestamp(entry.stat().st_mtime),
+            }
+        )
+    return items
+
+
+def _resolve_system_skill_dir(skill_name: str):
+    skills_root = _get_skills_root()
+    if not skills_root.exists() or not skills_root.is_dir():
+        return "", None, "技能目录不存在。"
+
+    normalized = str(skill_name or "").strip().replace("\\", "/").strip("/")
+    if not normalized or "/" in normalized or normalized in {".", ".."}:
+        return "", None, "技能名称不合法。"
+
+    target_dir = (skills_root / normalized).resolve()
+    skills_root_real = skills_root.resolve()
+    if target_dir != skills_root_real and not str(target_dir).startswith(f"{skills_root_real}{os.sep}"):
+        return normalized, None, "技能路径超出允许范围。"
+    if not target_dir.exists() or not target_dir.is_dir():
+        return normalized, None, "技能目录不存在。"
+    return normalized, target_dir, ""
+
+
+def _resolve_system_rule_file(path_value: str):
+    rules_root = _get_cursor_root() / "rules"
+    if not rules_root.exists() or not rules_root.is_dir():
+        return "", None, "规则目录不存在。"
+
+    normalized = _normalize_explorer_relpath(path_value)
+    if normalized is None or not normalized:
+        return "", None, "规则路径不合法。"
+    if normalized.startswith(".cursor/rules/"):
+        normalized = normalized[len(".cursor/rules/") :]
+    elif normalized == ".cursor/rules":
+        return "", None, "规则路径不合法。"
+
+    target = (rules_root / normalized).resolve()
+    rules_root_real = rules_root.resolve()
+    if target != rules_root_real and not str(target).startswith(f"{rules_root_real}{os.sep}"):
+        return normalized, None, "规则路径超出允许范围。"
+    if not target.exists() or not target.is_file():
+        return normalized, None, "规则文件不存在。"
+    if target.suffix.lower() != ".md":
+        return normalized, None, "仅支持查看与编辑 .md 规则文件。"
+    return normalized, target, ""
 
 
 def _load_control_module_info(module_name: str):
@@ -507,13 +877,15 @@ def _build_control_component_items(module_name: str, module_info):
         permission_grant_map = _load_permission_grant_map(module_name, component_key, permission_schema)
         permission_rows = _build_permission_rows(permission_schema, permission_grant_map)
         config_enabled = bool(schema["enabled"] or permission_schema["enabled"])
+        os_support = _normalize_supported_systems(item.get("supported_systems"))
         enabled_default = bool(item.get("default_enabled", True))
         enabled = enabled_default
-        if component_get_component_enabled is not None:
-            try:
-                enabled = bool(component_get_component_enabled(component_key))
-            except Exception:
-                enabled = enabled_default
+        try:
+            enabled_result = component_call_tool.get_component_enabled(component_key)
+            if bool(enabled_result.get("success")):
+                enabled = bool((enabled_result.get("data") or {}).get("enabled"))
+        except Exception:
+            enabled = enabled_default
         result.append(
             {
                 "component_key": component_key,
@@ -528,6 +900,8 @@ def _build_control_component_items(module_name: str, module_info):
                 "status_text": "已启用" if enabled else "已停用",
                 "toggle_action_text": "停用" if enabled else "启用",
                 "permission_rows": permission_rows,
+                "os_support": os_support,
+                "os_support_text": _format_supported_systems_text(os_support),
                 "config_url": reverse(
                     "component_system_param_config",
                     kwargs={"module_name": module_name, "component_key": component_key},
@@ -870,11 +1244,14 @@ def _run_control_api_test_task(task_id: int, module_name: str, function_path: st
                     "error": f"缺少必需系统权限确认: {', '.join(missing_keys)}",
                     "data": {"missing_permissions": missing_keys},
                 }
-            elif component_call_by_path is None:
-                call_result = {"success": False, "error": "组件调用入口不可用，无法执行测试。"}
             else:
-                data = component_call_by_path(function_path=function_path, kwargs=call_kwargs)
-                call_result = {"success": True, "data": data}
+                tool_result = component_call_tool.control_call(function_path=function_path, kwargs=call_kwargs)
+                if not bool(tool_result.get("success")):
+                    call_result = {"success": False, "error": str(tool_result.get("error", "组件调用失败"))}
+                else:
+                    call_data = tool_result.get("data", {})
+                    result_payload = call_data.get("result") if isinstance(call_data, dict) else call_data
+                    call_result = {"success": True, "data": result_payload}
         except Exception as exc:
             call_result = {"success": False, "error": str(exc)}
 
@@ -909,17 +1286,343 @@ def session_list(request):
 
 
 @login_required
+def toolset_list(request):
+    keyword = request.GET.get("q", "").strip()
+    current_runtime_os = _get_current_runtime_os()
+    selected_os = _normalize_os_filter(request.GET.get("os", ""), current_runtime_os)
+    all_toolsets = _list_toolset_items("", OS_FILTER_ALL)
+    toolsets = _list_toolset_items(keyword, selected_os)
+    context = _build_chat_context(request)
+    context.update(
+        {
+            "current_nav": "toolset_list",
+            "toolset_keyword": keyword,
+            "toolset_os": selected_os,
+            "os_options": _build_os_options(),
+            "current_runtime_os": current_runtime_os,
+            "current_runtime_os_label": OS_LABELS.get(current_runtime_os, current_runtime_os),
+            "toolset_items": toolsets,
+            "toolset_total": len(all_toolsets),
+            "toolset_filtered": len(toolsets),
+        }
+    )
+    return render(request, "collector/toolset_list.html", context)
+
+
+@login_required
+def agent_item_list(request, module_name):
+    if module_name not in ALLOWED_AGENT_MODULES:
+        messages.error(request, "不支持的智能体模块。")
+        return redirect("session_list")
+
+    keyword = request.GET.get("q", "").strip()
+    all_items = _list_agent_items(module_name, "")
+    filtered_items = _list_agent_items(module_name, keyword)
+    context = _build_chat_context(request)
+    context.update(
+        {
+            "current_nav": "agent_items",
+            "agent_active_module": module_name,
+            "agent_module_name": ALLOWED_AGENT_MODULES[module_name],
+            "agent_keyword": keyword,
+            "agent_items": filtered_items,
+            "agent_total": len(all_items),
+            "agent_filtered": len(filtered_items),
+        }
+    )
+    return render(request, "collector/agent_item_list.html", context)
+
+
+@login_required
+def agent_item_download(request, module_name, item_name):
+    if module_name not in ALLOWED_AGENT_MODULES:
+        messages.error(request, "不支持的智能体模块。")
+        return redirect("session_list")
+
+    normalized_name, target_dir, resolve_error = _resolve_agent_item_dir(module_name, item_name)
+    if resolve_error:
+        messages.error(request, resolve_error)
+        return redirect("agent_item_list", module_name=module_name)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, _, files in os.walk(target_dir):
+            for filename in files:
+                file_path = Path(root) / filename
+                arcname = str(Path(normalized_name) / file_path.relative_to(target_dir))
+                zf.write(file_path, arcname=arcname)
+    buffer.seek(0)
+
+    response = HttpResponse(buffer.getvalue(), content_type="application/zip")
+    response["Content-Disposition"] = f'attachment; filename="agent_{module_name}_{normalized_name}.zip"'
+    return response
+
+
+@login_required
+def agent_item_upload(request, module_name):
+    if module_name not in ALLOWED_AGENT_MODULES:
+        messages.error(request, "不支持的智能体模块。")
+        return redirect("session_list")
+    if request.method != "POST":
+        return redirect("agent_item_list", module_name=module_name)
+
+    upload = request.FILES.get("zip_file")
+    if not upload:
+        messages.error(request, "请选择 zip 文件后再上传。")
+        return redirect("agent_item_list", module_name=module_name)
+    if not upload.name.lower().endswith(".zip"):
+        messages.error(request, "仅支持上传 .zip 压缩包。")
+        return redirect("agent_item_list", module_name=module_name)
+
+    module_dir = _get_agent_module_dir(module_name).resolve()
+    module_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with zipfile.ZipFile(upload) as zf:
+            members = zf.infolist()
+            normalized_members = []
+            top_level_dirs = set()
+            for member in members:
+                member_parts = _normalize_zip_member_name(member.filename)
+                if member_parts is None:
+                    continue
+                normalized_members.append((member, member_parts))
+                top_level_dirs.add(member_parts[0])
+
+            if not normalized_members:
+                raise ValueError("压缩包为空，无法导入智能体项。")
+            if len(top_level_dirs) != 1:
+                raise ValueError("压缩包必须只包含一个智能体项目录。")
+
+            item_dir_name = next(iter(top_level_dirs))
+            target_dir = (module_dir / item_dir_name).resolve()
+            if not str(target_dir).startswith(f"{module_dir}{os.sep}") and target_dir != module_dir:
+                raise ValueError("智能体项目录不在模块目录下，已拒绝创建。")
+            if target_dir.exists():
+                raise ValueError(f"智能体项目录已存在：{item_dir_name}，请先删除后再上传。")
+
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            for member in zf.infolist():
+                member_parts = _normalize_zip_member_name(member.filename)
+                if member_parts is None:
+                    continue
+                member_parts = member_parts[1:]
+                if not member_parts:
+                    continue
+
+                resolved = (target_dir / Path(*member_parts)).resolve()
+                if not str(resolved).startswith(f"{target_dir}{os.sep}") and resolved != target_dir:
+                    raise ValueError("压缩包存在越界路径，已拒绝解压。")
+
+                if member.is_dir():
+                    resolved.mkdir(parents=True, exist_ok=True)
+                    continue
+
+                resolved.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member, "r") as src, open(resolved, "wb") as dst:
+                    dst.write(src.read())
+    except zipfile.BadZipFile:
+        messages.error(request, "压缩包格式错误，无法解压。")
+        return redirect("agent_item_list", module_name=module_name)
+    except Exception as exc:
+        messages.error(request, f"导入失败：{exc}")
+        return redirect("agent_item_list", module_name=module_name)
+
+    messages.success(request, f"智能体项 {item_dir_name} 导入完成。")
+    return redirect("agent_item_list", module_name=module_name)
+
+
+@login_required
+def system_skill_list(request):
+    keyword = request.GET.get("q", "").strip()
+    all_items = _list_system_skill_items("")
+    filtered_items = _list_system_skill_items(keyword)
+    context = _build_chat_context(request)
+    context.update(
+        {
+            "current_nav": "system_skills",
+            "skill_keyword": keyword,
+            "skill_items": filtered_items,
+            "skill_total": len(all_items),
+            "skill_filtered": len(filtered_items),
+        }
+    )
+    return render(request, "collector/system_skill_list.html", context)
+
+
+@login_required
+def system_skill_download(request, skill_name):
+    normalized_name, target_dir, resolve_error = _resolve_system_skill_dir(skill_name)
+    if resolve_error:
+        messages.error(request, resolve_error)
+        return redirect("system_skill_list")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, _, files in os.walk(target_dir):
+            for filename in files:
+                file_path = Path(root) / filename
+                arcname = str(Path(normalized_name) / file_path.relative_to(target_dir))
+                zf.write(file_path, arcname=arcname)
+    buffer.seek(0)
+
+    response = HttpResponse(buffer.getvalue(), content_type="application/zip")
+    response["Content-Disposition"] = f'attachment; filename="skill_{normalized_name}.zip"'
+    return response
+
+
+@login_required
+def system_skill_upload(request):
+    if request.method != "POST":
+        return redirect("system_skill_list")
+
+    upload = request.FILES.get("zip_file")
+    if not upload:
+        messages.error(request, "请选择 zip 文件后再导入。")
+        return redirect("system_skill_list")
+    if not upload.name.lower().endswith(".zip"):
+        messages.error(request, "仅支持上传 .zip 压缩包。")
+        return redirect("system_skill_list")
+
+    skills_root = _get_skills_root().resolve()
+    skills_root.mkdir(parents=True, exist_ok=True)
+    imported_name = ""
+    try:
+        with zipfile.ZipFile(upload) as zf:
+            members = zf.infolist()
+            normalized_members = []
+            top_level_dirs = set()
+            for member in members:
+                member_parts = _normalize_zip_member_name(member.filename)
+                if member_parts is None:
+                    continue
+                normalized_members.append((member, member_parts))
+                top_level_dirs.add(member_parts[0])
+
+            if not normalized_members:
+                raise ValueError("压缩包为空，无法导入技能。")
+            if len(top_level_dirs) != 1:
+                raise ValueError("压缩包必须只包含一个技能目录。")
+
+            imported_name = next(iter(top_level_dirs))
+            target_dir = (skills_root / imported_name).resolve()
+            if not str(target_dir).startswith(f"{skills_root}{os.sep}") and target_dir != skills_root:
+                raise ValueError("技能目录不在允许范围内，已拒绝导入。")
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            for member in members:
+                member_parts = _normalize_zip_member_name(member.filename)
+                if member_parts is None:
+                    continue
+                member_parts = member_parts[1:]
+                if not member_parts:
+                    continue
+                resolved = (target_dir / Path(*member_parts)).resolve()
+                if not str(resolved).startswith(f"{target_dir}{os.sep}") and resolved != target_dir:
+                    raise ValueError("压缩包存在越界路径，已拒绝解压。")
+                if member.is_dir():
+                    resolved.mkdir(parents=True, exist_ok=True)
+                    continue
+                resolved.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member, "r") as src, open(resolved, "wb") as dst:
+                    dst.write(src.read())
+    except zipfile.BadZipFile:
+        messages.error(request, "压缩包格式错误，无法解压。")
+        return redirect("system_skill_list")
+    except Exception as exc:
+        messages.error(request, f"技能导入失败：{exc}")
+        return redirect("system_skill_list")
+
+    messages.success(request, f"技能导入完成：{imported_name}")
+    return redirect("system_skill_list")
+
+
+@login_required
+def system_rule_list(request):
+    keyword = request.GET.get("q", "").strip()
+    all_items = _list_system_rule_items("")
+    filtered_items = _list_system_rule_items(keyword)
+    context = _build_chat_context(request)
+    context.update(
+        {
+            "current_nav": "system_rules",
+            "rule_keyword": keyword,
+            "rule_items": filtered_items,
+            "rule_total": len(all_items),
+            "rule_filtered": len(filtered_items),
+        }
+    )
+    return render(request, "collector/system_rule_list.html", context)
+
+
+@login_required
+def system_rule_detail(request):
+    target_path = (request.POST.get("path", "") if request.method == "POST" else request.GET.get("path", "")).strip()
+    normalized_path, target_file, resolve_error = _resolve_system_rule_file(target_path)
+    content_text = ""
+    is_editable = False
+
+    if request.method == "POST" and request.POST.get("action") == "save_rule":
+        if resolve_error:
+            messages.error(request, resolve_error)
+        else:
+            edited_content = request.POST.get("content", "")
+            try:
+                with open(target_file, "w", encoding="utf-8") as fp:
+                    fp.write(edited_content)
+                messages.success(request, "规则文档已保存。")
+                return redirect(f"{reverse('system_rule_detail')}?{urlencode({'path': normalized_path})}")
+            except OSError:
+                messages.error(request, "保存规则文档失败。")
+
+    if not resolve_error:
+        try:
+            with open(target_file, "r", encoding="utf-8") as fp:
+                content_text = fp.read()
+            is_editable = True
+        except OSError:
+            resolve_error = "读取规则文档失败。"
+
+    context = _build_chat_context(request)
+    context.update(
+        {
+            "current_nav": "system_rules",
+            "rule_path": normalized_path,
+            "rule_display_path": (Path(".cursor") / "rules" / normalized_path).as_posix() if normalized_path else "",
+            "rule_content": content_text,
+            "rule_error": resolve_error,
+            "rule_is_editable": is_editable,
+        }
+    )
+    return render(request, "collector/system_rule_detail.html", context)
+
+
+@login_required
 def control_function_list(request, module_name):
     if module_name not in ALLOWED_CONTROL_MODULES:
         messages.error(request, "不支持的组件模块。")
         return redirect("session_list")
 
     keyword = request.GET.get("q", "").strip()
+    current_runtime_os = _get_current_runtime_os()
+    selected_os = _normalize_os_filter(request.GET.get("os", ""), current_runtime_os)
     module_info = _load_control_module_info(module_name)
     all_functions = module_info.get("functions", []) if isinstance(module_info, dict) else []
-    filtered_functions = _filter_control_functions(all_functions, keyword)
-    component_items = _build_control_component_items(module_name, module_info)
+    keyword_filtered_functions = _filter_control_functions(all_functions, keyword)
+    all_component_items = _build_control_component_items(module_name, module_info)
+    all_component_map = {item["component_key"]: item for item in all_component_items}
+    component_items = [item for item in all_component_items if _is_os_match(item.get("os_support", []), selected_os)]
     component_map = {item["component_key"]: item for item in component_items}
+    filtered_functions = []
+    for fn_item in keyword_filtered_functions:
+        if not isinstance(fn_item, dict):
+            continue
+        comp_key = str(fn_item.get("component_key", "")).strip()
+        comp_info = all_component_map.get(comp_key)
+        if comp_info and not _is_os_match(comp_info.get("os_support", []), selected_os):
+            continue
+        filtered_functions.append(fn_item)
     for fn_item in filtered_functions:
         if not isinstance(fn_item, dict):
             continue
@@ -945,6 +1648,10 @@ def control_function_list(request, module_name):
             "control_active_module": module_name,
             "control_module_name": ALLOWED_CONTROL_MODULES[module_name],
             "control_keyword": keyword,
+            "control_os": selected_os,
+            "os_options": _build_os_options(),
+            "current_runtime_os": current_runtime_os,
+            "current_runtime_os_label": OS_LABELS.get(current_runtime_os, current_runtime_os),
             "control_module_info": module_info,
             "control_components": component_items,
             "control_functions": filtered_functions,
@@ -970,32 +1677,37 @@ def control_component_toggle_enabled(request, module_name, component_key):
     component_item = _get_component_item(module_info, component_key)
     if not component_item:
         messages.error(request, f"未找到组件：{component_key}")
-    elif component_set_component_enabled is None:
-        messages.error(request, "组件启停入口不可用，请检查 component 模块。")
     else:
         default_enabled = bool(component_item.get("default_enabled", True))
         current_enabled = default_enabled
-        if component_get_component_enabled is not None:
-            try:
-                current_enabled = bool(component_get_component_enabled(component_key))
-            except Exception:
-                current_enabled = default_enabled
+        try:
+            enabled_result = component_call_tool.get_component_enabled(component_key)
+            if bool(enabled_result.get("success")):
+                current_enabled = bool((enabled_result.get("data") or {}).get("enabled"))
+        except Exception:
+            current_enabled = default_enabled
         target_enabled = not current_enabled
         action = str(request.POST.get("action", "")).strip().lower()
         if action in {"enable", "disable"}:
             target_enabled = action == "enable"
 
-        try:
-            component_set_component_enabled(component_key, target_enabled)
+        set_result = component_call_tool.set_component_enabled(component_key, target_enabled)
+        if bool(set_result.get("success")):
             status_text = "已启用" if target_enabled else "已停用"
             messages.success(request, f"组件状态已更新：{component_key} -> {status_text}")
-        except Exception as exc:
-            messages.error(request, f"组件状态更新失败：{exc}")
+        else:
+            messages.error(request, f"组件状态更新失败：{set_result.get('error', '未知错误')}")
 
     redirect_url = reverse("control_function_list", kwargs={"module_name": module_name})
     keyword = str(request.POST.get("q", "")).strip()
+    selected_os = _normalize_os_filter(request.POST.get("os", ""), _get_current_runtime_os())
+    query_args = {}
     if keyword:
-        redirect_url = f"{redirect_url}?{urlencode({'q': keyword})}"
+        query_args["q"] = keyword
+    if selected_os:
+        query_args["os"] = selected_os
+    if query_args:
+        redirect_url = f"{redirect_url}?{urlencode(query_args)}"
     return redirect(redirect_url)
 
 
@@ -1663,11 +2375,12 @@ def session_send(request, session_id):
         if active_session.phase == RequirementSession.PHASE_COLLECTING:
             # 第一阶段：收集需求，判断是否完成
             analysis_result = analyzer.analyze_requirement(user_content, conversation_history, llm_model=active_session.project.llm_model)
-
-            # 检查用户是否确认需求描述完成
-            user_confirmed = any(keyword in user_content for keyword in ['说完了', '描述完了', '结束了', '完成了', '需求清楚了'])
-
-            if user_confirmed and analysis_result["is_complete"]:
+            decision = requirement_session_command.decide_transition(
+                phase=active_session.phase,
+                user_content=user_content,
+                analysis_is_complete=bool(analysis_result.get("is_complete")),
+            )
+            if decision.should_enter_organizing:
                 # 用户确认完成，进入第二阶段
                 active_session.phase = RequirementSession.PHASE_ORGANIZING
                 active_session.save()
@@ -1739,8 +2452,12 @@ def session_send(request, session_id):
                 content=response_text,
             )
 
-            # 检查用户是否确认完成
-            if '确认完成' in user_content or '完成了' in user_content:
+            decision = requirement_session_command.decide_transition(
+                phase=active_session.phase,
+                user_content=user_content,
+                analysis_is_complete=False,
+            )
+            if decision.should_mark_completed:
                 active_session.phase = RequirementSession.PHASE_COMPLETED
                 active_session.save()
 
@@ -1824,10 +2541,16 @@ def _get_project_rules(project):
 
     # 降级：仅读取当前层级 AGENTS.md
     rules_path = os.path.join(target_path, 'AGENTS.md')
-    if component_read_file and os.path.exists(rules_path):
-        fallback_result = component_read_file(rules_path)
-        if fallback_result.get("success"):
-            return fallback_result["data"]["content"]
+    if os.path.exists(rules_path):
+        fallback_result = component_call_tool.control_call(
+            function_path="component.handle.read_file",
+            kwargs={"file_path": rules_path},
+        )
+        if bool(fallback_result.get("success")):
+            fallback_data = fallback_result.get("data", {})
+            read_file_result = fallback_data.get("result") if isinstance(fallback_data, dict) else None
+            if isinstance(read_file_result, dict) and bool(read_file_result.get("success")):
+                return (read_file_result.get("data") or {}).get("content")
 
     return None
 

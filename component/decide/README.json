@@ -7,6 +7,7 @@
       "component_dir": "component/decide/qwen_client_component",
       "description": "Qwen 客户端组件，封装 dashscope SDK 调用与结果标准化。",
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "system_param_schema": {
         "enabled": true,
         "default_config_name": "default",

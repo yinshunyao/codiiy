@@ -151,6 +151,28 @@ class ComponentCallTool:
             logger.exception("ensure_dependencies failed")
             return {"success": False, "error": str(exc)}
 
+    def get_component_enabled(self, component_key: str) -> Dict[str, Any]:
+        """查询组件是否启用。"""
+        try:
+            from component import get_component_enabled
+
+            enabled = bool(get_component_enabled(component_key))
+            return {"success": True, "data": {"component_key": component_key, "enabled": enabled}}
+        except Exception as exc:
+            logger.exception("get_component_enabled failed")
+            return {"success": False, "error": str(exc)}
+
+    def set_component_enabled(self, component_key: str, enabled: bool) -> Dict[str, Any]:
+        """设置组件启停状态。"""
+        try:
+            from component import set_component_enabled
+
+            set_component_enabled(component_key, bool(enabled))
+            return {"success": True, "data": {"component_key": component_key, "enabled": bool(enabled)}}
+        except Exception as exc:
+            logger.exception("set_component_enabled failed")
+            return {"success": False, "error": str(exc)}
+
     def _read_module_readme(self, path: Path) -> Dict[str, Any]:
         content = path.read_text(encoding="utf-8")
         data = json.loads(content)

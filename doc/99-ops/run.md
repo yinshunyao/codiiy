@@ -116,7 +116,7 @@ python -m vllm.entrypoints.openai.api_server \
 3. Python 调用（在仓库根目录）：
 
 ```python
-from control.observe import understand_current_screen
+from agents.observe import understand_current_screen
 
 result = understand_current_screen(json_mode=True)
 print(result)

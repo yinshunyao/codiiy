@@ -124,7 +124,7 @@
                     <div class="message-row {% if message.role == 'user' %}user{% else %}assistant{% endif %}">
                         <div class="bubble {% if message.role == 'user' %}bubble-user{% else %}bubble-assistant{% endif %}">
                             <div class="meta" style="margin-top: 0;">
-                                {% if message.role == "user" %}你{% else %}{{ current_llm_name|default:"助手" }}{% endif %} · {{ message.created_at|date:"H:i:s" }}
+                                {% if message.role == "user" %}你{% else %}小柯{% endif %} · {{ message.created_at|date:"H:i:s" }}
                             </div>
                             <div class="message-text">
                                 {% if message.attachment %}

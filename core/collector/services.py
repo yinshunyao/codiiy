@@ -2,24 +2,12 @@ import logging
 import base64
 import mimetypes
 from django.conf import settings
-import sys
 import os
 import re
 
+from tools.component_call_tool import ComponentCallTool
+
 logger = logging.getLogger(__name__)
-
-# 使用绝对路径导入 component.decide.qwen_client_component
-current_dir = os.path.dirname(os.path.abspath(__file__))
-repo_root_path = os.path.abspath(os.path.join(current_dir, "..", ".."))
-if repo_root_path not in sys.path:
-    sys.path.insert(0, repo_root_path)
-
-try:
-    from component.decide.qwen_client_component import QwenClient
-    logger.info("QwenClient imported successfully from %s", repo_root_path)
-except ImportError as e:
-    QwenClient = None
-    logger.error("Failed to import QwenClient from %s: %s", repo_root_path, str(e))
 
 
 class RequirementAnalyzer:
@@ -31,17 +19,11 @@ class RequirementAnalyzer:
     def __init__(self, llm_model=None):
         self.api_key = settings.QWEN_API_KEY
         self.model = llm_model.model_id if llm_model else settings.QWEN_MODEL
-        self.client = None
-
-        if self.api_key and QwenClient:
-            try:
-                self.client = QwenClient(api_key=self.api_key)
-            except Exception as e:
-                logger.error(f"初始化 QwenClient 失败: {str(e)}")
+        self.component_tool = ComponentCallTool(auto_install=False)
 
     def is_available(self):
         """检查大模型服务是否可用"""
-        return self.client is not None
+        return self.component_tool is not None
 
     def analyze_requirement(self, user_content, conversation_history=None, llm_model=None, latest_attachment_path=None):
         """
@@ -87,11 +69,11 @@ class RequirementAnalyzer:
                 has_multimodal_input=has_multimodal_input,
             )
 
-            result = self.client.chat_completion(
+            result = self._chat_completion(
                 model=model_to_use,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=500
+                max_tokens=500,
             )
 
             if result and result.get("success"):
@@ -323,11 +305,11 @@ REPLY: 给用户显示的回复内容
                 has_multimodal_input=has_multimodal_input,
             )
 
-            result = self.client.chat_completion(
+            result = self._chat_completion(
                 model=model_to_use,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=2000
+                max_tokens=2000,
             )
 
             if result and result.get("success"):
@@ -366,7 +348,7 @@ REPLY: 给用户显示的回复内容
         conversation_text = ""
         attachment_paths = []
         for msg in conversation_history:
-            role = "用户" if msg.get("role") == "user" else "助手"
+            role = "用户" if msg.get("role") == "user" else "小柯"
             content = msg.get("content", "")
             attachment_path = msg.get("attachment_path")
             attachment_name = msg.get("attachment_name")
@@ -380,7 +362,7 @@ REPLY: 给用户显示的回复内容
 
         rules_text = project_rules.strip() if project_rules else "未提供规则文档。"
 
-        system_prompt = f"""你是一个专业的需求分析师。你的任务是根据用户与助手的完整对话，输出原始需求文档。
+        system_prompt = f"""你是一个专业的需求分析师。你的任务是根据用户与小柯的完整对话，输出原始需求文档。
 
 你必须遵循以下规则：
 1. 严格遵循“规则文档”中的约束；当规则有层级时，按“就近优先”的顺序理解。
@@ -607,6 +589,29 @@ REPLY: 给用户显示的回复内容
         if response_data is None:
             return ""
         return str(response_data)
+
+    def _chat_completion(self, model, messages, temperature, max_tokens):
+        kwargs = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+
+        tool_result = self.component_tool.control_call(
+            function_path="component.decide.chat_completion",
+            kwargs=kwargs,
+        )
+        if not isinstance(tool_result, dict) or not bool(tool_result.get("success")):
+            return {"success": False, "error": str(tool_result.get("error", "component 调用失败"))}
+
+        payload = tool_result.get("data", {})
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if not isinstance(result, dict):
+            return {"success": False, "error": "component.decide.chat_completion 返回格式错误"}
+        return result
 
 
 analyzer = RequirementAnalyzer()

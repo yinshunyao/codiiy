@@ -25,7 +25,7 @@ class ProjectForm(forms.ModelForm):
     path = forms.CharField(
         max_length=500,
         required=False,
-        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': '留空则默认放在 core 同级目录，或输入路径如：test 或 /path/to/project'}),
+        widget=forms.TextInput(attrs={'class': 'form-mindforge', 'placeholder': '留空则默认放在 core 同级目录，或输入路径如：test 或 /path/to/project'}),
         label='项目路径',
         help_text='支持相对路径（相对于 core 的父目录）或绝对路径。需求文档将保存到项目路径下的 doc/01-or 文件夹'
     )
@@ -34,8 +34,8 @@ class ProjectForm(forms.ModelForm):
         model = Project
         fields = ['name', 'path', 'description', 'is_default']
         widgets = {
-            'name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': '项目名称'}),
-            'description': forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': '项目描述（可选）'}),
+            'name': forms.TextInput(attrs={'class': 'form-mindforge', 'placeholder': '项目名称'}),
+            'description': forms.Textarea(attrs={'class': 'form-mindforge', 'rows': 3, 'placeholder': '项目描述（可选）'}),
             'is_default': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
         labels = {

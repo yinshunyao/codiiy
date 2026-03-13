@@ -83,6 +83,11 @@
     "runtime_policy": "测试页执行前校验 required=true 的权限是否已确认，未确认则拒绝执行并提示配置入口。",
     "boundary_policy": "Django 页面仅做权限声明、状态记录与指引，不直接进行系统提权。"
   },
+  "system_platform_rules": {
+    "component_field": "各模块 README.json 的 components[] 必须声明 supported_systems（macos/linux/windows）。",
+    "index_field": "component/component_index.json 中组件元数据需同步维护 supported_systems。",
+    "ui_policy": "组件功能页默认按当前运行系统筛选，也可切换到全部或其他系统。"
+  },
   "api_param_rules": {
     "parameter_layering": [
       "组件参数统一分为两层，禁止混用：",

@@ -80,6 +80,7 @@
                 <span class="chip">组件：{{ control_module_name }}</span>
                 <span class="chip">总函数：{{ control_function_total }}</span>
                 <span class="chip">匹配：{{ control_function_filtered }}</span>
+                <span class="chip">当前系统：{{ current_runtime_os_label }}</span>
                 {% if current_project %}
                 <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
                 {% endif %}
@@ -93,10 +94,15 @@
             <div class="control-toolbar">
                 <form method="get" action="{% url 'control_function_list' control_active_module %}" class="control-search-form">
                     <input type="text" name="q" value="{{ control_keyword }}" placeholder="模糊搜索函数路径/描述/参数" class="control-search-input">
+                    <select name="os" class="control-toolbar-btn">
+                        {% for option in os_options %}
+                        <option value="{{ option.value }}" {% if option.value == control_os %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
                     <button type="submit" class="control-toolbar-btn">搜索</button>
                     <button type="button" id="upload-trigger-btn" class="control-toolbar-btn">上传</button>
                     {% if control_keyword %}
-                    <a class="chip" href="{% url 'control_function_list' control_active_module %}">清空</a>
+                    <a class="chip" href="{% url 'control_function_list' control_active_module %}?os={{ control_os }}">清空</a>
                     {% endif %}
                 </form>
             </div>
@@ -119,6 +125,7 @@
                             <div class="meta">{{ group.component.description|default:"无描述" }}</div>
                             <div class="meta">目录：{{ group.component.component_dir|default:"-" }}</div>
                             <div class="meta">组件标识：{{ group.component.component_key|default:"-" }}</div>
+                            <div class="meta">支持系统：{{ group.component.os_support_text }}</div>
                             <div class="meta">状态：{{ group.component.status_text }}</div>
                             <div class="meta">
                                 系统权限信息：
@@ -151,6 +158,7 @@
                             <form method="post" action="{{ group.component.toggle_url }}" class="component-action-form">
                                 {% csrf_token %}
                                 <input type="hidden" name="q" value="{{ control_keyword }}">
+                                <input type="hidden" name="os" value="{{ control_os }}">
                                 <button type="submit" class="chip component-chip-btn">{{ group.component.toggle_action_text }}</button>
                             </form>
                             {% endif %}

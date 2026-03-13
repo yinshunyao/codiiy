@@ -104,6 +104,7 @@ def list_components() -> List[Dict[str, Any]]:
                 "component_dir": metadata.get("component_dir"),
                 "version": metadata.get("version"),
                 "default_enabled": bool(metadata.get("default_enabled", True)),
+                "supported_systems": metadata.get("supported_systems", ["macos", "linux", "windows"]),
                 "enabled": get_component_enabled(component_key),
                 "functions": sorted(function_map.get(component_key, [])),
             }

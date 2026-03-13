@@ -14,6 +14,13 @@
 - `component.get_component_enabled`
 - `component.set_component_enabled`
 
+## 组件调用入口约束（全局强制）
+
+- 所有非组件模块（如 `tools`、`control`、`core` 等）在查询组件信息或调用组件函数时，必须统一通过 `tools/component_call_tool` 处理。
+- 禁止在非组件模块中直接导入、直接调用 `component` 代码（包括 `component.call_by_path` 等入口函数）。
+- `tools/component_call_tool` 是跨模块访问组件的唯一标准入口；若调用链路不足，应扩展该工具，而不是在调用方绕过工具直接接入组件。
+- 组件内部代码可按既有方式组织与调用；本约束主要针对“非组件模块 -> 组件”的跨模块调用行为。
+
 ## 模块边界要求
 
 `component` 下按能力域划分模块，当前至少包含：

@@ -7,6 +7,7 @@
       "component_dir": "component/observe/screen_capture_component",
       "description": "屏幕截图组件，负责截图、保存与图片加载。",
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "system_param_schema": {
         "enabled": false,
         "fields": []
@@ -30,6 +31,7 @@
       "component_dir": "component/observe/screen_understand_component",
       "description": "屏幕理解组件，负责图像语义理解与结构化输出。",
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "system_param_schema": {
         "enabled": false,
         "fields": []

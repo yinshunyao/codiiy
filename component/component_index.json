@@ -7,6 +7,7 @@
         "component.observe.capture_screen_to_file"
       ],
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "version": "1.0.0"
     },
     "observe.screen_understand_component": {
@@ -17,6 +18,7 @@
         "component.observe.understand_current_screen"
       ],
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "version": "1.0.0"
     },
     "handle.file_reader_component": {
@@ -31,6 +33,7 @@
         "component.handle.get_system_info"
       ],
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "version": "1.0.0"
     },
     "handle.mouse_action_component": {
@@ -45,6 +48,7 @@
         "component.handle.get_mouse_position"
       ],
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "version": "1.0.0"
     },
     "handle.python_package_component": {
@@ -56,6 +60,20 @@
         "component.handle.uninstall_python_package"
       ],
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
+      "version": "1.0.0"
+    },
+    "handle.macos_terminal_component": {
+      "module": "handle",
+      "component_dir": "component/handle/macos_terminal_component",
+      "export_functions": [
+        "component.handle.create_macos_terminal_session",
+        "component.handle.run_macos_terminal_command",
+        "component.handle.get_macos_terminal_output",
+        "component.handle.close_macos_terminal_session"
+      ],
+      "default_enabled": true,
+      "supported_systems": ["macos"],
       "version": "1.0.0"
     },
     "communicate.dingtalk_component": {
@@ -65,6 +83,7 @@
         "component.communicate.send_dingtalk_text"
       ],
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "version": "1.0.0"
     },
     "communicate.wecom_component": {
@@ -74,6 +93,7 @@
         "component.communicate.send_wecom_text"
       ],
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "version": "1.0.0"
     },
     "communicate.feishu_component": {
@@ -83,6 +103,7 @@
         "component.communicate.send_feishu_text"
       ],
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "version": "1.0.0"
     },
     "decide.qwen_client_component": {
@@ -94,6 +115,7 @@
         "component.decide.text_generation"
       ],
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "version": "1.0.0"
     }
   },
@@ -116,6 +138,10 @@
     "component.handle.query_python_package": "handle.python_package_component",
     "component.handle.install_python_package": "handle.python_package_component",
     "component.handle.uninstall_python_package": "handle.python_package_component",
+    "component.handle.create_macos_terminal_session": "handle.macos_terminal_component",
+    "component.handle.run_macos_terminal_command": "handle.macos_terminal_component",
+    "component.handle.get_macos_terminal_output": "handle.macos_terminal_component",
+    "component.handle.close_macos_terminal_session": "handle.macos_terminal_component",
     "component.communicate.send_dingtalk_text": "communicate.dingtalk_component",
     "component.communicate.send_wecom_text": "communicate.wecom_component",
     "component.communicate.send_feishu_text": "communicate.feishu_component",

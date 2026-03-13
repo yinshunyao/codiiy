@@ -1,12 +1,13 @@
 {
   "directory": "component/handle",
-  "description": "执行与处理模块，提供文件读取、检索、元信息查询、鼠标操作与 Python 依赖包管理能力。",
+  "description": "执行与处理模块，提供文件读取、检索、元信息查询、鼠标操作、Python 依赖包管理与 macOS 终端会话能力。",
   "components": [
     {
       "component_key": "handle.file_reader_component",
       "component_dir": "component/handle/file_reader_component",
       "description": "文件读取组件，负责文件内容读取、行区间读取、关键字/正则检索和文件统计。",
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "system_param_schema": {
         "enabled": false,
         "fields": []
@@ -17,6 +18,7 @@
       "component_dir": "component/handle/mouse_action_component",
       "description": "鼠标操作组件，提供单击、双击、移动、滚动、拖拽与位置查询等常用桌面鼠标能力。",
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "system_param_schema": {
         "enabled": false,
         "fields": []
@@ -40,6 +42,7 @@
       "component_dir": "component/handle/python_package_component",
       "description": "Python 依赖包管理组件，提供依赖包查询、安装与卸载能力。",
       "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
       "system_param_schema": {
         "enabled": false,
         "fields": []
@@ -61,6 +64,30 @@
             "required": false,
             "description": "用于提升 pip 安装性能；不可写时通常可继续安装但会出现告警。",
             "grant_guide": "确保用户对 ~/.cache/pip 或等效缓存目录有写权限。",
+            "grant_url": ""
+          }
+        ]
+      }
+    },
+    {
+      "component_key": "handle.macos_terminal_component",
+      "component_dir": "component/handle/macos_terminal_component",
+      "description": "macOS 终端组件，提供多 shell 会话创建、命令执行、输出读取与会话关闭能力。",
+      "default_enabled": true,
+      "supported_systems": ["macos"],
+      "system_param_schema": {
+        "enabled": false,
+        "fields": []
+      },
+      "system_permission_schema": {
+        "enabled": true,
+        "permissions": [
+          {
+            "key": "macos.terminal.execution",
+            "name": "macOS 终端执行权限",
+            "required": true,
+            "description": "通过 shell 子进程执行命令并读取标准输出。",
+            "grant_guide": "确保 Python 运行用户具备终端命令执行权限，并可访问目标工作目录。",
             "grant_url": ""
           }
         ]
@@ -671,6 +698,130 @@
       "demo_param_schema": {
         "enabled": true,
         "fields": []
+      }
+    },
+    {
+      "path": "component.handle.create_macos_terminal_session",
+      "component_key": "handle.macos_terminal_component",
+      "description": "创建 macOS 终端会话并返回 session_id。",
+      "input": {
+        "cwd": "str，可选，初始工作目录；默认当前进程目录",
+        "shell_mode": "str，可选，默认 zsh；支持 zsh/bash/csh/dash/ksh/sh/tcsh"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "cwd",
+            "required": false,
+            "sensitive": false,
+            "description": "初始工作目录，留空使用当前目录",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "shell_mode",
+            "required": false,
+            "sensitive": false,
+            "description": "shell 模式：zsh/bash/csh/dash/ksh/sh/tcsh",
+            "value_type": "string",
+            "default": "zsh"
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.run_macos_terminal_command",
+      "component_key": "handle.macos_terminal_component",
+      "description": "在指定终端会话中执行命令并返回本次新增输出。",
+      "input": {
+        "session_id": "str，会话 ID",
+        "command": "str，待执行 shell 命令",
+        "timeout_seconds": "float，可选，默认 30.0"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "session_id",
+            "required": true,
+            "sensitive": false,
+            "description": "会话 ID",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "command",
+            "required": true,
+            "sensitive": false,
+            "description": "待执行 shell 命令",
+            "value_type": "string",
+            "default": "pwd"
+          },
+          {
+            "name": "timeout_seconds",
+            "required": false,
+            "sensitive": false,
+            "description": "执行超时时间（秒）",
+            "value_type": "float",
+            "default": 30.0
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.get_macos_terminal_output",
+      "component_key": "handle.macos_terminal_component",
+      "description": "读取终端会话累计输出，可基于 offset 增量拉取。",
+      "input": {
+        "session_id": "str，会话 ID",
+        "offset": "int，可选，默认 0，输出读取起始偏移"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "session_id",
+            "required": true,
+            "sensitive": false,
+            "description": "会话 ID",
+            "value_type": "string",
+            "default": ""
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "sensitive": false,
+            "description": "输出读取起始偏移",
+            "value_type": "int",
+            "default": 0
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.close_macos_terminal_session",
+      "component_key": "handle.macos_terminal_component",
+      "description": "关闭指定终端会话并释放资源。",
+      "input": {
+        "session_id": "str，会话 ID"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "session_id",
+            "required": true,
+            "sensitive": false,
+            "description": "会话 ID",
+            "value_type": "string",
+            "default": ""
+          }
+        ]
       }
     }
   ],

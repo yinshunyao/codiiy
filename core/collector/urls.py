@@ -21,6 +21,23 @@ urlpatterns = [
     path("projects/<int:project_id>/set_default/", views.project_set_default, name="project_set_default"),
     path("settings/profile/", views.profile_settings, name="profile_settings"),
     path("settings/system/", views.system_settings, name="system_settings"),
+    path("tools/sets/", views.toolset_list, name="toolset_list"),
+    path("agents/<str:module_name>/", views.agent_item_list, name="agent_item_list"),
+    path(
+        "agents/<str:module_name>/upload/",
+        views.agent_item_upload,
+        name="agent_item_upload",
+    ),
+    path(
+        "agents/<str:module_name>/<str:item_name>/download/",
+        views.agent_item_download,
+        name="agent_item_download",
+    ),
+    path("system/skills/", views.system_skill_list, name="system_skill_list"),
+    path("system/skills/upload/", views.system_skill_upload, name="system_skill_upload"),
+    path("system/skills/<str:skill_name>/download/", views.system_skill_download, name="system_skill_download"),
+    path("system/rules/", views.system_rule_list, name="system_rule_list"),
+    path("system/rules/detail/", views.system_rule_detail, name="system_rule_detail"),
     # component 功能管理
     path("component/functions/<str:module_name>/", views.control_function_list, name="control_function_list"),
     path(

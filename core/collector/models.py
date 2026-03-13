@@ -220,7 +220,7 @@ class RequirementMessage(models.Model):
     ROLE_ASSISTANT = "assistant"
     ROLE_CHOICES = [
         (ROLE_USER, "用户"),
-        (ROLE_ASSISTANT, "助手"),
+        (ROLE_ASSISTANT, "小柯"),
     ]
 
     session = models.ForeignKey(
