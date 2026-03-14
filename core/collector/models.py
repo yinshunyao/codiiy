@@ -1,7 +1,10 @@
 import os
 import mimetypes
+import re
+from pathlib import Path
 from django.conf import settings
 from django.db import models
+from django.core.exceptions import ValidationError
 
 
 
@@ -32,6 +35,218 @@ class LLMModel(models.Model):
 
     def __str__(self):
         return f"{self.provider.name} - {self.name}"
+
+
+class LLMApiConfig(models.Model):
+    """大模型 API 配置。"""
+
+    name = models.CharField(max_length=100, verbose_name="配置名称")
+    provider_name = models.CharField(max_length=100, verbose_name="厂商名称")
+    base_url = models.CharField(max_length=300, blank=True, verbose_name="API Base URL")
+    api_key = models.CharField(max_length=300, blank=True, verbose_name="API Key")
+    default_model_id = models.CharField(max_length=120, blank=True, verbose_name="默认模型 ID")
+    is_enabled = models.BooleanField(default=True, verbose_name="是否启用")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="llm_api_configs",
+        verbose_name="创建人",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    class Meta:
+        verbose_name = "大模型 API 配置"
+        verbose_name_plural = "大模型 API 配置"
+        ordering = ["-updated_at", "name"]
+        constraints = [
+            models.UniqueConstraint(fields=["created_by", "name"], name="uniq_user_llm_api_config_name"),
+        ]
+
+    def __str__(self):
+        return f"{self.provider_name} - {self.name}"
+
+
+class LocalLLMConfig(models.Model):
+    """本地大模型配置（支持 Ollama / llama-cpp-python）。"""
+
+    BACKEND_OLLAMA = "ollama"
+    BACKEND_LLAMA_CPP = "llama_cpp"
+    BACKEND_CHOICES = [
+        (BACKEND_OLLAMA, "Ollama 服务"),
+        (BACKEND_LLAMA_CPP, "Python 组件（llama-cpp-python）"),
+    ]
+
+    name = models.CharField(max_length=100, verbose_name="配置名称")
+    runtime_backend = models.CharField(
+        max_length=32,
+        choices=BACKEND_CHOICES,
+        default=BACKEND_OLLAMA,
+        verbose_name="本地模型实现模式",
+    )
+    endpoint = models.CharField(
+        max_length=300,
+        default="http://127.0.0.1:11434",
+        blank=True,
+        verbose_name="Ollama 地址",
+    )
+    model_name = models.CharField(max_length=120, verbose_name="模型名称")
+    keep_alive = models.CharField(max_length=32, default="5m", verbose_name="keep_alive")
+    model_file_path = models.CharField(
+        max_length=500,
+        blank=True,
+        verbose_name="llama-cpp 模型文件路径",
+        help_text="仅 Python 组件模式使用，如 /data/models/qwen2.5-7b-instruct.gguf",
+    )
+    llama_cpp_n_ctx = models.PositiveIntegerField(default=4096, verbose_name="llama-cpp 上下文窗口")
+    is_enabled = models.BooleanField(default=True, verbose_name="是否启用")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="local_llm_configs",
+        verbose_name="创建人",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    class Meta:
+        verbose_name = "本地大模型配置"
+        verbose_name_plural = "本地大模型配置"
+        ordering = ["-updated_at", "name"]
+        constraints = [
+            models.UniqueConstraint(fields=["created_by", "name"], name="uniq_user_local_llm_config_name"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class LocalLLMRuntimeTask(models.Model):
+    """本地模型运行任务（异步）。"""
+
+    ACTION_ACTIVATE = "activate"
+    ACTION_DEACTIVATE = "deactivate"
+    ACTION_CHOICES = [
+        (ACTION_ACTIVATE, "激活模型"),
+        (ACTION_DEACTIVATE, "取消激活"),
+    ]
+
+    STATUS_PENDING = "pending"
+    STATUS_RUNNING = "running"
+    STATUS_SUCCESS = "success"
+    STATUS_FAILED = "failed"
+    STATUS_INTERRUPTED = "interrupted"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "等待中"),
+        (STATUS_RUNNING, "执行中"),
+        (STATUS_SUCCESS, "成功"),
+        (STATUS_FAILED, "失败"),
+        (STATUS_INTERRUPTED, "中断"),
+    ]
+
+    STAGE_QUEUED = "queued"
+    STAGE_PULLING = "pulling"
+    STAGE_WARMING = "warming"
+    STAGE_UNLOADING = "unloading"
+    STAGE_COMPLETED = "completed"
+    STAGE_CHOICES = [
+        (STAGE_QUEUED, "排队中"),
+        (STAGE_PULLING, "拉取模型"),
+        (STAGE_WARMING, "加载模型"),
+        (STAGE_UNLOADING, "卸载模型"),
+        (STAGE_COMPLETED, "完成"),
+    ]
+
+    config = models.ForeignKey(
+        LocalLLMConfig,
+        on_delete=models.CASCADE,
+        related_name="runtime_tasks",
+        verbose_name="本地模型配置",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="local_llm_runtime_tasks",
+        verbose_name="创建人",
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES, verbose_name="任务动作")
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        verbose_name="任务状态",
+    )
+    stage = models.CharField(
+        max_length=20,
+        choices=STAGE_CHOICES,
+        default=STAGE_QUEUED,
+        verbose_name="任务阶段",
+    )
+    detail_message = models.TextField(blank=True, verbose_name="状态说明")
+    error_message = models.TextField(blank=True, verbose_name="错误信息")
+    started_at = models.DateTimeField(null=True, blank=True, verbose_name="开始时间")
+    finished_at = models.DateTimeField(null=True, blank=True, verbose_name="结束时间")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    class Meta:
+        verbose_name = "本地模型运行任务"
+        verbose_name_plural = "本地模型运行任务"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.config_id} {self.action} {self.status}"
+
+
+class LocalLLMRuntimeState(models.Model):
+    """本地模型运行状态（持久化）。"""
+
+    STATUS_INACTIVE = "inactive"
+    STATUS_ACTIVATING = "activating"
+    STATUS_ACTIVE = "active"
+    STATUS_DEACTIVATING = "deactivating"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_INACTIVE, "未激活"),
+        (STATUS_ACTIVATING, "激活中"),
+        (STATUS_ACTIVE, "已激活"),
+        (STATUS_DEACTIVATING, "取消激活中"),
+        (STATUS_FAILED, "失败"),
+    ]
+
+    config = models.OneToOneField(
+        LocalLLMConfig,
+        on_delete=models.CASCADE,
+        related_name="runtime_state",
+        verbose_name="本地模型配置",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_INACTIVE,
+        verbose_name="模型状态",
+    )
+    current_action = models.CharField(max_length=20, blank=True, verbose_name="当前动作")
+    is_busy = models.BooleanField(default=False, verbose_name="是否忙碌")
+    last_message = models.TextField(blank=True, verbose_name="最近状态说明")
+    last_error = models.TextField(blank=True, verbose_name="最近错误")
+    last_task = models.ForeignKey(
+        LocalLLMRuntimeTask,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="state_refs",
+        verbose_name="最近任务",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    class Meta:
+        verbose_name = "本地模型运行状态"
+        verbose_name_plural = "本地模型运行状态"
+
+    def __str__(self):
+        return f"{self.config_id} {self.status}"
 
 
 class Project(models.Model):
@@ -169,6 +384,256 @@ class Project(models.Model):
         return project
 
 
+def _normalize_companion_modules_text(raw_text: str) -> str:
+    values = []
+    for raw in str(raw_text or "").split(","):
+        token = str(raw).strip().lower()
+        if not token:
+            continue
+        if token in values:
+            continue
+        values.append(token)
+    return ",".join(values)
+
+
+def _normalize_companion_paths_text(raw_text: str) -> str:
+    values = []
+    for raw in str(raw_text or "").split(","):
+        token = str(raw).strip().lower()
+        if not token:
+            continue
+        if token in values:
+            continue
+        values.append(token)
+    return ",".join(values)
+
+
+def _safe_companion_path_fragment(raw_value: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(raw_value or "").strip()).strip("-").lower()
+    return normalized[:80]
+
+
+def _build_companion_knowledge_relpath(companion_name: str) -> str:
+    fragment = _safe_companion_path_fragment(companion_name) or "companion"
+    return f"data/companions/{fragment}/knowledge"
+
+
+class CompanionProfile(models.Model):
+    """伙伴配置（伙伴不等同于智能体目录，而是可配置角色主体）。"""
+
+    LLM_ROUTING_MANUAL = "manual"
+    LLM_ROUTING_AUTO = "auto"
+    LLM_ROUTING_CHOICES = [
+        (LLM_ROUTING_MANUAL, "手动模式"),
+        (LLM_ROUTING_AUTO, "自动模式"),
+    ]
+
+    LLM_SOURCE_API = "api"
+    LLM_SOURCE_LOCAL = "local"
+    LLM_SOURCE_CHOICES = [
+        (LLM_SOURCE_API, "大模型 API"),
+        (LLM_SOURCE_LOCAL, "本地模型"),
+    ]
+
+    name = models.CharField(max_length=80, verbose_name="伙伴标识")
+    display_name = models.CharField(max_length=120, blank=True, verbose_name="展示名称")
+    role_title = models.CharField(max_length=120, blank=True, verbose_name="角色名称")
+    persona = models.TextField(blank=True, verbose_name="角色描述")
+    tone = models.CharField(max_length=120, blank=True, verbose_name="回复语气")
+    memory_notes = models.TextField(blank=True, verbose_name="记忆摘要")
+    llm_routing_mode = models.CharField(
+        max_length=20,
+        choices=LLM_ROUTING_CHOICES,
+        default=LLM_ROUTING_MANUAL,
+        verbose_name="模型路由模式",
+    )
+    llm_source_type = models.CharField(
+        max_length=20,
+        choices=LLM_SOURCE_CHOICES,
+        default=LLM_SOURCE_API,
+        verbose_name="模型来源",
+    )
+    llm_api_config = models.ForeignKey(
+        LLMApiConfig,
+        on_delete=models.SET_NULL,
+        related_name="companion_profiles",
+        null=True,
+        blank=True,
+        verbose_name="API 模型配置",
+    )
+    local_llm_config = models.ForeignKey(
+        LocalLLMConfig,
+        on_delete=models.SET_NULL,
+        related_name="companion_profiles",
+        null=True,
+        blank=True,
+        verbose_name="本地模型配置",
+    )
+    default_model_name = models.CharField(max_length=120, blank=True, verbose_name="默认使用模型")
+    backup_model_tokens = models.JSONField(default=list, blank=True, verbose_name="备用模型列表")
+    allowed_agent_modules_text = models.CharField(
+        max_length=200,
+        blank=True,
+        verbose_name="可调用智能体模块",
+        help_text="逗号分隔，如 mindforge,helm",
+    )
+    allowed_control_modules_text = models.CharField(
+        max_length=200,
+        blank=True,
+        verbose_name="可调用工具组件模块",
+        help_text="逗号分隔，如 observe,handle",
+    )
+    allowed_toolsets_text = models.CharField(
+        max_length=300,
+        blank=True,
+        verbose_name="可调用工具集",
+        help_text="逗号分隔，如 component_call_tool,knowledge_curation_tool",
+    )
+    allowed_control_components_text = models.TextField(
+        blank=True,
+        verbose_name="可调用组件",
+        help_text="逗号分隔 component_key，如 handle.file_reader_component",
+    )
+    allowed_control_functions_text = models.TextField(
+        blank=True,
+        verbose_name="可调用组件 API",
+        help_text="逗号分隔函数路径，如 component.observe.understand_current_screen",
+    )
+    knowledge_path = models.CharField(
+        max_length=300,
+        blank=True,
+        verbose_name="知识库路径",
+        help_text="相对项目根目录，如 data/companions/er-gou/knowledge",
+    )
+    is_active = models.BooleanField(default=True, verbose_name="是否启用")
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="companions",
+        verbose_name="所属项目",
+        null=True,
+        blank=True,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="companions",
+        verbose_name="创建人",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    class Meta:
+        verbose_name = "伙伴配置"
+        verbose_name_plural = "伙伴配置"
+        ordering = ["-updated_at", "name"]
+        constraints = [
+            models.UniqueConstraint(fields=["created_by", "project", "name"], name="uniq_user_project_companion"),
+        ]
+
+    def __str__(self) -> str:
+        return self.display_name or self.name
+
+    def save(self, *args, **kwargs):
+        self.name = str(self.name or "").strip()
+        self.display_name = str(self.display_name or "").strip()
+        self.llm_routing_mode = str(self.llm_routing_mode or self.LLM_ROUTING_MANUAL).strip() or self.LLM_ROUTING_MANUAL
+        self.default_model_name = str(self.default_model_name or "").strip()
+        if not isinstance(self.backup_model_tokens, list):
+            self.backup_model_tokens = []
+        normalized_backup = []
+        for item in self.backup_model_tokens:
+            token = str(item or "").strip()
+            if not token or token in normalized_backup:
+                continue
+            normalized_backup.append(token)
+        self.backup_model_tokens = normalized_backup
+        self.allowed_agent_modules_text = _normalize_companion_modules_text(self.allowed_agent_modules_text)
+        self.allowed_control_modules_text = _normalize_companion_modules_text(self.allowed_control_modules_text)
+        self.allowed_toolsets_text = _normalize_companion_modules_text(self.allowed_toolsets_text)
+        self.allowed_control_components_text = _normalize_companion_paths_text(self.allowed_control_components_text)
+        self.allowed_control_functions_text = _normalize_companion_paths_text(self.allowed_control_functions_text)
+        self.llm_source_type = str(self.llm_source_type or self.LLM_SOURCE_API).strip() or self.LLM_SOURCE_API
+        if self.llm_routing_mode == self.LLM_ROUTING_AUTO:
+            self.llm_api_config = None
+            self.local_llm_config = None
+            self.default_model_name = ""
+            self.backup_model_tokens = []
+        self.knowledge_path = _build_companion_knowledge_relpath(self.name)
+        self.knowledge_path = str(self.knowledge_path or "").strip().replace("\\", "/").lstrip("/")
+        super().save(*args, **kwargs)
+        self._ensure_knowledge_dir_exists()
+
+    def _ensure_knowledge_dir_exists(self):
+        if not self.project_id:
+            return
+        project_root_text = str(getattr(self.project, "path", "") or "").strip()
+        if not project_root_text:
+            return
+        project_root = Path(project_root_text)
+        target_dir = (project_root / self.knowledge_path).resolve()
+        project_root_real = project_root.resolve()
+        if target_dir != project_root_real and not str(target_dir).startswith(f"{project_root_real}{os.sep}"):
+            return
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+    def clean(self):
+        super().clean()
+        routing_mode = str(self.llm_routing_mode or "").strip() or self.LLM_ROUTING_MANUAL
+        if routing_mode not in {self.LLM_ROUTING_MANUAL, self.LLM_ROUTING_AUTO}:
+            raise ValidationError({"llm_routing_mode": "模型路由模式不合法。"})
+
+        if routing_mode == self.LLM_ROUTING_AUTO:
+            self.llm_api_config = None
+            self.local_llm_config = None
+            self.default_model_name = ""
+            self.backup_model_tokens = []
+            return
+
+        source = str(self.llm_source_type or "").strip()
+        if source not in {self.LLM_SOURCE_API, self.LLM_SOURCE_LOCAL}:
+            raise ValidationError({"llm_source_type": "模型来源不合法。"})
+
+        if source == self.LLM_SOURCE_API:
+            if not self.llm_api_config_id:
+                raise ValidationError({"llm_api_config": "请选择 API 模型配置。"})
+            self.local_llm_config = None
+        elif source == self.LLM_SOURCE_LOCAL:
+            if not self.local_llm_config_id:
+                raise ValidationError({"local_llm_config": "请选择本地模型配置。"})
+            self.llm_api_config = None
+
+        if not isinstance(self.backup_model_tokens, list):
+            raise ValidationError({"backup_model_tokens": "备用模型列表格式不合法。"})
+        dedup_tokens = []
+        for raw in self.backup_model_tokens:
+            token = str(raw or "").strip()
+            if not token or token in dedup_tokens:
+                continue
+            dedup_tokens.append(token)
+        self.backup_model_tokens = dedup_tokens
+        if str(self.default_model_name or "").strip():
+            config_id = self.llm_api_config_id if source == self.LLM_SOURCE_API else self.local_llm_config_id
+            default_token = f"{source}|{config_id}|{str(self.default_model_name or '').strip()}"
+            if default_token in self.backup_model_tokens:
+                raise ValidationError({"backup_model_tokens": "备用模型不能与默认模型重复。"})
+
+    def get_allowed_agent_modules(self):
+        return [item for item in self.allowed_agent_modules_text.split(",") if item]
+
+    def get_allowed_control_modules(self):
+        return [item for item in self.allowed_control_modules_text.split(",") if item]
+
+    def get_allowed_toolsets(self):
+        return [item for item in self.allowed_toolsets_text.split(",") if item]
+
+    def get_allowed_control_components(self):
+        return [item for item in self.allowed_control_components_text.split(",") if item]
+
+    def get_allowed_control_functions(self):
+        return [item for item in self.allowed_control_functions_text.split(",") if item]
+
+
 class RequirementSession(models.Model):
     # 会话阶段
     PHASE_COLLECTING = "collecting"  # 第一阶段：收集需求
@@ -220,7 +685,7 @@ class RequirementMessage(models.Model):
     ROLE_ASSISTANT = "assistant"
     ROLE_CHOICES = [
         (ROLE_USER, "用户"),
-        (ROLE_ASSISTANT, "小柯"),
+        (ROLE_ASSISTANT, "助手"),
     ]
 
     session = models.ForeignKey(
@@ -252,6 +717,69 @@ class RequirementMessage(models.Model):
     @property
     def is_audio_attachment(self):
         return self.attachment_mime_type.startswith("audio/")
+
+
+class ChatReplyTask(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_RUNNING = "running"
+    STATUS_COMPLETED = "completed"
+    STATUS_STOPPED = "stopped"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "等待中"),
+        (STATUS_RUNNING, "生成中"),
+        (STATUS_COMPLETED, "已完成"),
+        (STATUS_STOPPED, "已停止"),
+        (STATUS_FAILED, "失败"),
+    ]
+
+    session = models.ForeignKey(
+        RequirementSession,
+        on_delete=models.CASCADE,
+        related_name="reply_tasks",
+        verbose_name="所属会话",
+    )
+    user_message = models.ForeignKey(
+        RequirementMessage,
+        on_delete=models.CASCADE,
+        related_name="reply_tasks_as_prompt",
+        verbose_name="用户消息",
+    )
+    assistant_message = models.ForeignKey(
+        RequirementMessage,
+        on_delete=models.CASCADE,
+        related_name="reply_tasks_as_reply",
+        verbose_name="助手消息",
+        null=True,
+        blank=True,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="chat_reply_tasks",
+        verbose_name="创建人",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        verbose_name="状态",
+    )
+    stop_requested = models.BooleanField(default=False, verbose_name="是否请求停止")
+    error_message = models.TextField(blank=True, verbose_name="错误信息")
+    execution_trace = models.JSONField(default=dict, blank=True, verbose_name="执行轨迹")
+    started_at = models.DateTimeField(null=True, blank=True, verbose_name="开始时间")
+    finished_at = models.DateTimeField(null=True, blank=True, verbose_name="结束时间")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    class Meta:
+        verbose_name = "聊天回复任务"
+        verbose_name_plural = "聊天回复任务"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"session={self.session_id}, status={self.status}"
 
 
 class CommunicationChannelConfig(models.Model):

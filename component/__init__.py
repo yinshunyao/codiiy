@@ -1,6 +1,6 @@
 """component 顶层包。"""
 
-from .component_manager import (
+from .manager import (
     get_component_enabled,
     list_components,
     set_component_enabled,

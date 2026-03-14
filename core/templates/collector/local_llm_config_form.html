@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+
+{% block title %}{{ local_llm_page_title }}{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-local-model-form {
+        grid-template-columns: 260px 1fr;
+    }
+    .model-form-card {
+        max-width: 760px;
+    }
+    .model-form-preset-card {
+        margin-bottom: 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel-2);
+        padding: 12px;
+    }
+    .model-form-preset-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 8px;
+    }
+    .model-form-preset-row select {
+        min-width: 320px;
+        height: 42px;
+        padding: 8px 12px;
+        font-size: 14px;
+        line-height: 1.3;
+    }
+    .model-form-headline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+    }
+    .model-form-headline h3 {
+        margin: 0;
+        font-size: 16px;
+    }
+    .model-form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+    .model-form-field label {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-size: 13px;
+    }
+    .model-form-field input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .model-form-field input[type="number"],
+    .model-form-field select {
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .mode-section-hidden {
+        display: none;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+
+<div class="app-shell app-shell-local-model-form">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">{{ local_llm_page_title }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'local_llm_config_list' %}">返回本地模型列表</a>
+            </div>
+        </div>
+
+        <section class="panel model-form-card">
+            <form method="post">
+                {% csrf_token %}
+                <div class="model-form-preset-card">
+                    <div><strong>本地模型预设</strong></div>
+                    <div class="meta" style="margin-top: 4px;">选择预设后会自动填充实现模式与参数；你可以再按机器资源手动调整。</div>
+                    <div class="model-form-preset-row">
+                        <label for="localLlmPresetSelect" class="meta" style="margin: 0;">预设方案</label>
+                        <select id="localLlmPresetSelect">
+                            <option value="">请选择预设（可选）</option>
+                            {% for preset in local_llm_presets %}
+                            <option value="{{ preset.key }}">{{ preset.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="model-form-headline">
+                    <h3>基础参数</h3>
+                    <span class="meta">建议先选预设再微调</span>
+                </div>
+                <div class="model-form-grid">
+                    <div class="model-form-field">
+                        <label for="{{ local_llm_config_form.name.id_for_label }}">配置名称</label>
+                        {{ local_llm_config_form.name }}
+                        {% if local_llm_config_form.name.errors %}<div class="meta" style="color: #ff8f8f;">{{ local_llm_config_form.name.errors|join:"；" }}</div>{% endif %}
+                    </div>
+                    <div class="model-form-field">
+                        <label for="{{ local_llm_config_form.runtime_backend.id_for_label }}">本地模型实现模式</label>
+                        {{ local_llm_config_form.runtime_backend }}
+                        {% if local_llm_config_form.runtime_backend.errors %}<div class="meta" style="color: #ff8f8f;">{{ local_llm_config_form.runtime_backend.errors|join:"；" }}</div>{% endif %}
+                    </div>
+                    <div class="model-form-field">
+                        <label for="{{ local_llm_config_form.model_name.id_for_label }}">模型名称</label>
+                        {{ local_llm_config_form.model_name }}
+                        {% if local_llm_config_form.model_name.errors %}<div class="meta" style="color: #ff8f8f;">{{ local_llm_config_form.model_name.errors|join:"；" }}</div>{% endif %}
+                    </div>
+                    <div class="model-form-field js-ollama-field">
+                        <label for="{{ local_llm_config_form.endpoint.id_for_label }}">Ollama 地址</label>
+                        {{ local_llm_config_form.endpoint }}
+                        {% if local_llm_config_form.endpoint.errors %}<div class="meta" style="color: #ff8f8f;">{{ local_llm_config_form.endpoint.errors|join:"；" }}</div>{% endif %}
+                    </div>
+                    <div class="model-form-field js-ollama-field">
+                        <label for="{{ local_llm_config_form.keep_alive.id_for_label }}">keep_alive</label>
+                        {{ local_llm_config_form.keep_alive }}
+                        {% if local_llm_config_form.keep_alive.errors %}<div class="meta" style="color: #ff8f8f;">{{ local_llm_config_form.keep_alive.errors|join:"；" }}</div>{% endif %}
+                    </div>
+                    <div class="model-form-field js-llama-cpp-field">
+                        <label for="{{ local_llm_config_form.model_file_path.id_for_label }}">llama-cpp 模型文件路径</label>
+                        {{ local_llm_config_form.model_file_path }}
+                        {% if local_llm_config_form.model_file_path.errors %}<div class="meta" style="color: #ff8f8f;">{{ local_llm_config_form.model_file_path.errors|join:"；" }}</div>{% endif %}
+                    </div>
+                    <div class="model-form-field js-llama-cpp-field">
+                        <label for="{{ local_llm_config_form.llama_cpp_n_ctx.id_for_label }}">llama-cpp 上下文窗口</label>
+                        {{ local_llm_config_form.llama_cpp_n_ctx }}
+                        {% if local_llm_config_form.llama_cpp_n_ctx.errors %}<div class="meta" style="color: #ff8f8f;">{{ local_llm_config_form.llama_cpp_n_ctx.errors|join:"；" }}</div>{% endif %}
+                    </div>
+                    <div class="model-form-field" style="display: flex; align-items: center;">
+                        <label for="{{ local_llm_config_form.is_enabled.id_for_label }}">{{ local_llm_config_form.is_enabled }} 启用配置</label>
+                    </div>
+                </div>
+                <div style="margin-top: 12px;">
+                    <button type="submit">{{ local_llm_submit_text }}</button>
+                </div>
+            </form>
+        </section>
+    </main>
+</div>
+
+{{ local_llm_presets|json_script:"localLlmPresetData" }}
+<script>
+    {% include "collector/partials/sidebar_menu_script.html" %}
+
+    (function bindLocalLlmPresetFill() {
+        const dataNode = document.getElementById("localLlmPresetData");
+        const select = document.getElementById("localLlmPresetSelect");
+        const nameInput = document.getElementById("id_name");
+        const endpointInput = document.getElementById("id_endpoint");
+        const modelInput = document.getElementById("id_model_name");
+        const keepAliveInput = document.getElementById("id_keep_alive");
+        const backendSelect = document.getElementById("id_runtime_backend");
+        const modelFilePathInput = document.getElementById("id_model_file_path");
+        const llamaCtxInput = document.getElementById("id_llama_cpp_n_ctx");
+        const ollamaFields = document.querySelectorAll(".js-ollama-field");
+        const llamaCppFields = document.querySelectorAll(".js-llama-cpp-field");
+        if (!dataNode || !select || !nameInput || !endpointInput || !modelInput || !keepAliveInput || !backendSelect || !modelFilePathInput || !llamaCtxInput) {
+            return;
+        }
+
+        let presets = [];
+        try {
+            presets = JSON.parse(dataNode.textContent || "[]");
+        } catch (error) {
+            presets = [];
+        }
+
+        const syncModeFields = function () {
+            const backend = String(backendSelect.value || "ollama");
+            ollamaFields.forEach(function (node) {
+                if (backend === "ollama") {
+                    node.classList.remove("mode-section-hidden");
+                } else {
+                    node.classList.add("mode-section-hidden");
+                }
+            });
+            llamaCppFields.forEach(function (node) {
+                if (backend === "llama_cpp") {
+                    node.classList.remove("mode-section-hidden");
+                } else {
+                    node.classList.add("mode-section-hidden");
+                }
+            });
+        };
+
+        const fillByPresetKey = function (presetKey) {
+            if (!presetKey) {
+                return;
+            }
+            const target = presets.find((item) => String(item.key || "") === String(presetKey));
+            if (!target) {
+                return;
+            }
+            nameInput.value = target.name || "";
+            backendSelect.value = target.runtime_backend || "ollama";
+            endpointInput.value = target.endpoint || "";
+            modelInput.value = target.model_name || "";
+            keepAliveInput.value = target.keep_alive || "";
+            modelFilePathInput.value = target.model_file_path || "";
+            llamaCtxInput.value = target.llama_cpp_n_ctx || 4096;
+            syncModeFields();
+        };
+
+        select.addEventListener("change", function () {
+            fillByPresetKey(select.value);
+        });
+        backendSelect.addEventListener("change", syncModeFields);
+        syncModeFields();
+    })();
+</script>
+{% endblock %}

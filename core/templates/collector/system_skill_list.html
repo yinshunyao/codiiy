@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}技能列表{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-system {
+        grid-template-columns: 260px 1fr;
+    }
+    .system-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+    }
+    .system-search-form {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0;
+    }
+    .system-search-input {
+        width: 50%;
+        min-width: 260px;
+        height: 36px;
+        box-sizing: border-box;
+    }
+    .system-toolbar-btn {
+        height: 36px;
+        padding: 0 14px;
+        line-height: 36px;
+    }
+    .system-item {
+        margin-bottom: 12px;
+    }
+    .skill-card-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+
+<div class="app-shell app-shell-system">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">技能总数：{{ skill_total }}</span>
+                <span class="chip">匹配：{{ skill_filtered }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'session_list' %}">返回对话页</a>
+            </div>
+        </div>
+
+        <section class="panel">
+            <div class="system-toolbar">
+                <form method="get" action="{% url 'system_skill_list' %}" class="system-search-form">
+                    <input type="text" name="q" value="{{ skill_keyword }}" placeholder="按技能名 / 路径 / 摘要筛选" class="system-search-input">
+                    <button type="submit" class="system-toolbar-btn">搜索</button>
+                    <button type="button" id="upload-skill-trigger-btn" class="system-toolbar-btn">导入技能</button>
+                    {% if skill_keyword %}
+                    <a class="chip" href="{% url 'system_skill_list' %}">清空</a>
+                    {% endif %}
+                </form>
+            </div>
+            <div class="meta">信息来源：`.cursor/skills` 目录。</div>
+            <div class="meta" style="margin-top: 8px;">
+                导入说明：仅支持 `.zip`，压缩包必须只包含一个技能目录；导入后自动解压到 `.cursor/skills/<skill_name>` 目录。
+            </div>
+            <form method="post" action="{% url 'system_skill_upload' %}" enctype="multipart/form-data" id="skill-zip-upload-form" style="display: none;">
+                {% csrf_token %}
+                <input type="file" name="zip_file" id="skill-zip-file-input" accept=".zip" required>
+            </form>
+        </section>
+
+        <section class="conversation panel" style="margin-top: 12px;">
+            {% if skill_items %}
+                {% for item in skill_items %}
+                <div class="panel system-item">
+                    <div class="skill-card-header">
+                        <div style="min-width: 0;">
+                            <div><strong>{{ item.name }}</strong></div>
+                            <div class="meta">目录：{{ item.directory }}</div>
+                            <div class="meta">SKILL.md：{% if item.skill_file_exists %}已存在{% else %}缺失{% endif %}</div>
+                            <div class="meta">更新时间：{{ item.updated_at|date:"Y-m-d H:i" }}</div>
+                            <div class="meta">摘要：{{ item.summary }}</div>
+                        </div>
+                        <div style="white-space: nowrap;">
+                            <a class="chip" href="{% url 'system_skill_download' item.name %}">导出技能</a>
+                        </div>
+                    </div>
+                    <div style="margin-top: 8px;">
+                        <div class="meta">关键文件：</div>
+                        {% if item.key_files %}
+                        <pre style="margin: 6px 0 0; white-space: pre-wrap;">{{ item.key_files|join:", " }}</pre>
+                        {% else %}
+                        <div class="meta">当前目录下暂无可展示文件</div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="panel">当前没有匹配的技能。</div>
+            {% endif %}
+        </section>
+    </main>
+</div>
+
+<script>
+    (function bindSkillZipUpload() {
+        const triggerBtn = document.getElementById("upload-skill-trigger-btn");
+        const fileInput = document.getElementById("skill-zip-file-input");
+        const uploadForm = document.getElementById("skill-zip-upload-form");
+        if (!triggerBtn || !fileInput || !uploadForm) {
+            return;
+        }
+        triggerBtn.addEventListener("click", function () {
+            fileInput.click();
+        });
+        fileInput.addEventListener("change", function () {
+            if (fileInput.files && fileInput.files.length > 0) {
+                uploadForm.submit();
+            }
+        });
+    })();
+
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

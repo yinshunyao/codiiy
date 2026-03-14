@@ -33,7 +33,10 @@ class QwenClient:
                 response = dashscope.Generation.call(model=model, messages=messages, **kwargs)
 
             if response.status_code == 200:
-                return {"success": True, "data": response.output}
+                return {
+                    "success": True,
+                    "data": self._normalize_response_payload(response),
+                }
             return {
                 "success": False,
                 "error": f"Model call failed with status code: {response.status_code}",
@@ -82,6 +85,115 @@ class QwenClient:
                 if any(key in block for key in ("file", "image", "video", "audio")):
                     return True
         return False
+
+    def _normalize_response_payload(self, response) -> Dict[str, Any]:
+        output = getattr(response, "output", None)
+        usage = getattr(response, "usage", None)
+        normalized: Dict[str, Any] = {
+            "text": "",
+            "choices": [],
+            "usage": self._normalize_usage(usage),
+        }
+
+        text = self._extract_text_from_output(output)
+        if text:
+            normalized["text"] = text
+
+        choices = self._extract_choices_from_output(output)
+        if choices:
+            normalized["choices"] = choices
+
+        # 兜底保留 output 字典，便于上层做兼容解析，但避免直接返回 SDK 对象。
+        if isinstance(output, dict):
+            normalized["output"] = output
+        elif output is not None and hasattr(output, "__dict__"):
+            normalized["output"] = dict(getattr(output, "__dict__", {}))
+        elif output is not None:
+            normalized["output"] = str(output)
+        return normalized
+
+    @staticmethod
+    def _extract_text_from_output(output: Any) -> str:
+        if output is None:
+            return ""
+        if isinstance(output, dict):
+            text_value = output.get("text")
+            if isinstance(text_value, str) and text_value.strip():
+                return text_value.strip()
+            if isinstance(text_value, list):
+                parts = []
+                for item in text_value:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        parts.append(item.get("text", ""))
+                    elif isinstance(item, str):
+                        parts.append(item)
+                merged = "\n".join([part for part in parts if str(part).strip()]).strip()
+                if merged:
+                    return merged
+        text_attr = getattr(output, "text", None)
+        if isinstance(text_attr, str) and text_attr.strip():
+            return text_attr.strip()
+        return ""
+
+    @staticmethod
+    def _extract_choices_from_output(output: Any) -> List[Dict[str, Any]]:
+        if output is None:
+            return []
+        choices = []
+        if isinstance(output, dict):
+            raw_choices = output.get("choices")
+            if isinstance(raw_choices, list):
+                for item in raw_choices:
+                    if isinstance(item, dict):
+                        choices.append(item)
+                return choices
+        raw_choices = getattr(output, "choices", None)
+        if isinstance(raw_choices, list):
+            for item in raw_choices:
+                if isinstance(item, dict):
+                    choices.append(item)
+                elif item is not None and hasattr(item, "__dict__"):
+                    choices.append(dict(getattr(item, "__dict__", {})))
+        return choices
+
+    @staticmethod
+    def _normalize_usage(usage: Any) -> Dict[str, int]:
+        if usage is None:
+            return {}
+        usage_map = usage if isinstance(usage, dict) else dict(getattr(usage, "__dict__", {}) or {})
+        if not isinstance(usage_map, dict):
+            return {}
+
+        def to_int(value):
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, (int, float)):
+                return int(value)
+            if isinstance(value, str) and value.strip().isdigit():
+                return int(value.strip())
+            return None
+
+        prompt = None
+        completion = None
+        total = None
+        for key in ("prompt_tokens", "input_tokens"):
+            prompt = to_int(usage_map.get(key))
+            if prompt is not None:
+                break
+        for key in ("completion_tokens", "output_tokens"):
+            completion = to_int(usage_map.get(key))
+            if completion is not None:
+                break
+        total = to_int(usage_map.get("total_tokens"))
+        if total is None and (prompt is not None or completion is not None):
+            total = int(prompt or 0) + int(completion or 0)
+        if prompt is None and completion is None and total is None:
+            return {}
+        return {
+            "prompt_tokens": int(prompt or 0),
+            "completion_tokens": int(completion or 0),
+            "total_tokens": int(total or 0),
+        }
 
 
 def create_qwen_client(api_key: Optional[str] = None, config_name: Optional[str] = None) -> QwenClient:

@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+
+{% block title %}伙伴列表{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-companion {
+        grid-template-columns: 260px 1fr;
+    }
+    .companion-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+    }
+    .companion-search-form {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0;
+    }
+    .companion-search-input {
+        width: 50%;
+        min-width: 260px;
+        height: 36px;
+        box-sizing: border-box;
+    }
+    .companion-toolbar-btn {
+        height: 36px;
+        padding: 0 14px;
+        line-height: 36px;
+    }
+    .companion-chat-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .companion-chat-item {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: var(--panel);
+    }
+    .companion-chat-avatar {
+        width: 44px;
+        height: 44px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: 700;
+        background: var(--panel-2);
+    }
+    .companion-chat-main {
+        min-width: 0;
+    }
+    .companion-chat-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+    .companion-chat-name {
+        font-weight: 600;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .companion-chat-time {
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+        margin-left: auto;
+    }
+    .companion-chat-summary {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.35;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .companion-chat-submeta {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .companion-chat-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+
+<div class="app-shell app-shell-companion">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">伙伴总数：{{ companion_total }}</span>
+                <span class="chip">匹配：{{ companion_filtered }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'companion_create' %}">+ 新增伙伴</a>
+                <a class="chip" href="{% url 'session_list' %}">返回对话页</a>
+            </div>
+        </div>
+
+        <section class="panel">
+            <div class="companion-toolbar">
+                <form method="get" action="{% url 'companion_list' %}" class="companion-search-form">
+                    <input type="text" name="q" value="{{ companion_keyword }}" placeholder="按伙伴名 / 角色 / 语气 / 知识路径筛选" class="companion-search-input">
+                    <button type="submit" class="companion-toolbar-btn">搜索</button>
+                    {% if companion_keyword %}
+                    <a class="chip" href="{% url 'companion_list' %}">清空</a>
+                    {% endif %}
+                </form>
+            </div>
+            <div class="meta">伙伴是角色主体，不等同于智能体目录；可配置调用能力与记忆，知识库目录由系统自动管理。</div>
+        </section>
+
+        <section class="conversation panel" style="margin-top: 12px;">
+            {% if companion_items %}
+            <div class="companion-chat-list">
+                {% for item in companion_items %}
+                <div class="companion-chat-item">
+                    <span class="companion-chat-avatar">{{ item.avatar_text }}</span>
+                    <div class="companion-chat-main">
+                        <div class="companion-chat-header">
+                            <span class="companion-chat-name">{{ item.display_name_or_name }}</span>
+                            {% if not item.is_active %}<span class="meta">已停用</span>{% endif %}
+                            <span class="companion-chat-time">{% if item.last_chat_at %}{{ item.last_chat_at|date:"m-d H:i" }}{% else %}未聊天{% endif %}</span>
+                        </div>
+                        <div class="companion-chat-summary">{{ item.last_chat_summary }}</div>
+                        <div class="companion-chat-submeta">
+                            角色：{{ item.role_title|default:"未配置" }} ｜ 工具集：{{ item.toolsets_text }} ｜ 知识库：{% if item.knowledge_exists %}已关联（{{ item.knowledge_file_count }}）{% else %}未就绪{% endif %}
+                        </div>
+                    </div>
+                    <div class="companion-chat-actions">
+                        <a class="chip" href="{% url 'companion_edit' item.obj.id %}">详情</a>
+                        <a class="chip" href="{% url 'companion_chat' item.obj.id %}" target="_blank" rel="noopener">聊一聊</a>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+                <div class="panel">
+                    <div>当前没有匹配的伙伴，请先创建。</div>
+                    <div style="margin-top: 10px;">
+                        <a class="chip" href="{% url 'companion_create' %}">立即新增伙伴</a>
+                    </div>
+                </div>
+            {% endif %}
+        </section>
+    </main>
+</div>
+
+<script>
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

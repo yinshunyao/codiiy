@@ -1,6 +1,7 @@
 import logging
 import base64
 import mimetypes
+import numbers
 from django.conf import settings
 import os
 import re
@@ -25,7 +26,14 @@ class RequirementAnalyzer:
         """检查大模型服务是否可用"""
         return self.component_tool is not None
 
-    def analyze_requirement(self, user_content, conversation_history=None, llm_model=None, latest_attachment_path=None):
+    def analyze_requirement(
+        self,
+        user_content,
+        conversation_history=None,
+        llm_model=None,
+        latest_attachment_path=None,
+        llm_model_id=None,
+    ):
         """
         分析用户需求表达是否完整
 
@@ -52,7 +60,7 @@ class RequirementAnalyzer:
             }
 
         try:
-            selected_model_id = llm_model.model_id if llm_model else self.model
+            selected_model_id = str(llm_model_id or "").strip() or (llm_model.model_id if llm_model else self.model)
             has_multimodal_input = self._has_multimodal_input(
                 conversation_history=conversation_history,
                 latest_attachment_path=latest_attachment_path,
@@ -95,6 +103,87 @@ class RequirementAnalyzer:
                 "response": "已收到，你描述完了么？",
                 "questions": [],
                 "error": str(e)
+            }
+
+    def chat(self, conversation_history=None, llm_model=None, llm_model_id=None):
+        """
+        通用聊天能力（不注入人设与原始需求整理流程）。
+        """
+        if not self.is_available():
+            return {
+                "success": False,
+                "response": "助手暂时不可用，请稍后再试。",
+                "error": "大模型服务不可用",
+            }
+
+        try:
+            selected_model_id = str(llm_model_id or "").strip() or (llm_model.model_id if llm_model else self.model)
+            history = []
+            for msg in conversation_history or []:
+                role = msg.get("role")
+                if role not in ("system", "user", "assistant"):
+                    continue
+                history.append(
+                    {
+                        "role": role,
+                        "content": self._build_message_content(
+                            msg.get("content") or "",
+                            msg.get("attachment_path"),
+                            use_multimodal=False,
+                        ),
+                    }
+                )
+
+            has_multimodal_input = self._history_has_supported_modal_attachments(conversation_history)
+            use_multimodal = self._is_vision_model(selected_model_id) and has_multimodal_input
+            if use_multimodal:
+                history = []
+                for msg in conversation_history or []:
+                    role = msg.get("role")
+                    if role not in ("system", "user", "assistant"):
+                        continue
+                    history.append(
+                        {
+                            "role": role,
+                            "content": self._build_message_content(
+                                msg.get("content") or "",
+                                msg.get("attachment_path"),
+                                use_multimodal=True,
+                            ),
+                        }
+                    )
+
+            model_to_use = self._resolve_model_for_task(
+                selected_model_id,
+                has_multimodal_input=has_multimodal_input,
+            )
+            result = self._chat_completion(
+                model=model_to_use,
+                messages=history,
+                temperature=0.3,
+                max_tokens=1200,
+            )
+            if result and result.get("success"):
+                response_text = self._extract_response_text(result.get("data"))
+                return {
+                    "success": True,
+                    "response": str(response_text or "").strip(),
+                    "token_usage": result.get("token_usage") or {},
+                    "error": None,
+                }
+            return {
+                "success": False,
+                "response": "助手暂时无法回复，请稍后重试。",
+                "token_usage": {},
+                "error": result.get("error") if result else "未知错误",
+            }
+        except Exception as e:
+            logger.error(f"通用聊天时出错: {str(e)}")
+            return {
+                "success": False,
+                "response": "助手暂时无法回复，请稍后重试。",
+                "token_usage": {},
+                "error": str(e),
             }
 
     def _build_analysis_messages(self, user_content, conversation_history=None, latest_attachment_path=None, use_multimodal=False):
@@ -265,7 +354,7 @@ REPLY: 给用户显示的回复内容
 
         return questions
 
-    def organize_requirement(self, conversation_history, project_rules=None, llm_model=None):
+    def organize_requirement(self, conversation_history, project_rules=None, llm_model=None, llm_model_id=None):
         """
         第二阶段：整理需求，生成原始需求文档
 
@@ -292,7 +381,7 @@ REPLY: 给用户显示的回复内容
             }
 
         try:
-            selected_model_id = llm_model.model_id if llm_model else self.model
+            selected_model_id = str(llm_model_id or "").strip() or (llm_model.model_id if llm_model else self.model)
             has_multimodal_input = self._history_has_supported_modal_attachments(conversation_history)
             use_multimodal = self._is_vision_model(selected_model_id) and has_multimodal_input
             messages = self._build_organization_messages(
@@ -563,6 +652,10 @@ REPLY: 给用户显示的回复内容
         return f"data:{mime_type};base64,{encoded}"
 
     def _extract_response_text(self, response_data):
+        unwrapped = self._unwrap_response_payload(response_data)
+        if unwrapped is not response_data:
+            return self._extract_response_text(unwrapped)
+
         if isinstance(response_data, dict):
             if "choices" in response_data and response_data["choices"]:
                 message = response_data["choices"][0].get("message", {})
@@ -585,7 +678,15 @@ REPLY: 给用户显示的回复内容
                 text_value = str(text_field).strip()
                 if text_value:
                     return text_value
+            output_field = response_data.get("output")
+            if output_field not in (None, "", {}):
+                output_text = self._extract_response_text(output_field)
+                if str(output_text or "").strip():
+                    return str(output_text).strip()
             return str(response_data)
+        text_attr = getattr(response_data, "text", None)
+        if isinstance(text_attr, str) and text_attr.strip():
+            return text_attr.strip()
         if response_data is None:
             return ""
         return str(response_data)
@@ -611,7 +712,64 @@ REPLY: 给用户显示的回复内容
         result = payload.get("result") if isinstance(payload, dict) else None
         if not isinstance(result, dict):
             return {"success": False, "error": "component.decide.chat_completion 返回格式错误"}
-        return result
+        return {
+            "success": True,
+            "data": result,
+            "token_usage": self._extract_token_usage(result),
+        }
+
+    def _extract_token_usage(self, response_data):
+        unwrapped = self._unwrap_response_payload(response_data)
+        if unwrapped is not response_data:
+            return self._extract_token_usage(unwrapped)
+
+        if not isinstance(response_data, dict):
+            usage_attr = getattr(response_data, "usage", None)
+            if usage_attr is None:
+                return {}
+            if isinstance(usage_attr, dict):
+                usage_raw = usage_attr
+            else:
+                usage_raw = dict(getattr(usage_attr, "__dict__", {}) or {})
+        else:
+            usage_raw = response_data.get("usage")
+            if not isinstance(usage_raw, dict):
+                return {}
+
+        prompt_tokens = self._first_numeric_value(usage_raw, ["prompt_tokens", "input_tokens"])
+        completion_tokens = self._first_numeric_value(usage_raw, ["completion_tokens", "output_tokens"])
+        total_tokens = self._first_numeric_value(usage_raw, ["total_tokens"])
+        if total_tokens is None and (prompt_tokens is not None or completion_tokens is not None):
+            total_tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
+        if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+            return {}
+        return {
+            "prompt_tokens": int(prompt_tokens or 0),
+            "completion_tokens": int(completion_tokens or 0),
+            "total_tokens": int(total_tokens or 0),
+        }
+
+    @staticmethod
+    def _first_numeric_value(payload, keys):
+        if not isinstance(payload, dict):
+            return None
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, numbers.Number):
+                return int(value)
+            if isinstance(value, str):
+                text = value.strip()
+                if text.isdigit():
+                    return int(text)
+        return None
+
+    @staticmethod
+    def _unwrap_response_payload(response_data):
+        if isinstance(response_data, dict):
+            nested_data = response_data.get("data")
+            if "success" in response_data and nested_data not in (None, ""):
+                return nested_data
+        return response_data
 
 
 analyzer = RequirementAnalyzer()

@@ -11,6 +11,8 @@
 5. 统一返回字典结构：`success`、`data`、`error`。
 6. 查询/设置组件启停状态（`get_component_enabled`、`set_component_enabled`）。
 7. 作为跨模块访问 `component` 的唯一标准入口，供非组件模块调用。
+8. 调用前自动按目标函数签名过滤无效参数（避免“unexpected keyword argument”中断流程）。
+9. 调用前统一校验组件必需系统权限（`system_permission_schema.required=true`），未确认时拒绝执行。
 
 支持操作系统：macos, linux, windows
 
@@ -68,6 +70,8 @@ print(result)
 
 ### `control_call(function_path, kwargs=None)`
 - 通过字符串路径调用 `component` 下函数，调用前自动执行依赖检查。
+- 调用前按组件声明检查必需系统权限；若缺失权限确认则返回 `success=False` 与 `missing_permissions`。
+- 若 `kwargs` 中存在目标函数未声明的参数，工具会自动过滤并记录 warning 日志。
 
 ### `get_component_enabled(component_key)`
 - 查询指定组件当前是否启用。
@@ -83,3 +87,4 @@ print(result)
 4. 默认不执行运行时自动安装；如需启用可显式传入 `auto_install=True`，或设置环境变量 `COMPONENT_AUTO_INSTALL=1`；
 5. 建议在非 root 用户 + 虚拟环境中运行，避免 `pip` 权限与目录可写问题；
 6. 本工具只负责组件能力查询与调用，不负责实现具体业务流程编排。
+7. 当 Django/ORM 或权限存储不可用时，权限检查按降级策略放行，避免因迁移未执行导致整体调用中断。

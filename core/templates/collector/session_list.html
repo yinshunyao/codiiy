@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}会话列表{% endblock %}
+{% block title %}{% if is_companion_chat and companion_chat %}{{ companion_chat.display_name|default:companion_chat.name }}{% else %}会话列表{% endif %}{% endblock %}
 
 {% block content %}
 <style>
@@ -9,17 +9,92 @@
     }
     {% include "collector/partials/sidebar_menu_styles.css" %}
     .chat-main-layout {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 300px;
-        gap: 14px;
+        position: relative;
+        display: flex;
+        flex-direction: column;
         flex: 1;
         min-height: 0;
+        --summary-drawer-width: min(360px, 48vw);
+    }
+    .chat-main-layout .conversation {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(156, 167, 195, 0.65) rgba(255, 255, 255, 0.06);
+        scrollbar-gutter: stable;
+    }
+    .chat-main-layout .conversation::-webkit-scrollbar {
+        width: 8px;
+    }
+    .chat-main-layout .conversation::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.06);
+        border-radius: 999px;
+    }
+    .chat-main-layout .conversation::-webkit-scrollbar-thumb {
+        background: rgba(156, 167, 195, 0.65);
+        border-radius: 999px;
+    }
+    .chat-main-layout .conversation::-webkit-scrollbar-thumb:hover {
+        background: rgba(156, 167, 195, 0.85);
     }
     .session-history {
         display: flex;
         flex-direction: column;
         min-height: 0;
         padding: 12px;
+    }
+    .session-history-drawer {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: var(--summary-drawer-width);
+        transform: translateX(calc(100% + 16px));
+        transition: transform 0.22s ease;
+        z-index: 35;
+        box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35);
+    }
+    .chat-main-layout.summary-drawer-open .session-history-drawer {
+        transform: translateX(0);
+    }
+    .summary-drawer-toggle {
+        position: absolute;
+        top: 50%;
+        right: -8px;
+        transform: translate(100%, -50%);
+        z-index: 36;
+        border-radius: 10px 0 0 10px;
+        padding: 10px 8px;
+    }
+    .chat-main-layout.summary-drawer-open .summary-drawer-toggle {
+        right: calc(var(--summary-drawer-width) + 8px);
+        transform: translateY(-50%);
+    }
+    .summary-drawer-backdrop {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        border: none;
+        padding: 0;
+        background: rgba(0, 0, 0, 0.24);
+        z-index: 34;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.22s ease;
+    }
+    .chat-main-layout.summary-drawer-open .summary-drawer-backdrop {
+        opacity: 1;
+        pointer-events: auto;
+    }
+    .summary-drawer-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 10px;
+    }
+    .summary-drawer-header .history-title {
+        margin: 0;
     }
     .history-title {
         margin: 0 0 10px;
@@ -75,12 +150,104 @@
         background: rgba(255, 255, 255, 0.08);
         color: #ff8f8f;
     }
+    .chat-input-main {
+        position: relative;
+    }
+    .mention-suggestion-box {
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: calc(100% + 6px);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 6px;
+        max-height: 180px;
+        overflow-y: auto;
+        z-index: 20;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+    }
+    .mention-suggestion-box.is-hidden {
+        display: none;
+    }
+    .mention-suggestion-item {
+        display: block;
+        width: 100%;
+        background: transparent;
+        border: none;
+        color: var(--text);
+        text-align: left;
+        border-radius: 8px;
+        padding: 8px 10px;
+        cursor: pointer;
+    }
+    .mention-suggestion-item:hover,
+    .mention-suggestion-item.is-active {
+        background: var(--panel-2);
+    }
+    .mention-suggestion-item .meta {
+        margin-top: 2px;
+    }
+    .composer-action-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin: 0 10px;
+    }
+    .composer-action-row .composer-status {
+        margin: 0;
+        flex: 1;
+        min-width: 0;
+    }
+    .composer-action-row .composer-submit-btn {
+        margin: 0;
+        align-self: auto;
+        flex-shrink: 0;
+    }
+    .process-trace-wrap {
+        margin-top: 8px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel-2);
+        padding: 8px 10px;
+    }
+    .process-trace-step {
+        margin-top: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.02);
+        padding: 6px 8px;
+    }
+    .process-trace-step summary {
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--muted);
+    }
+    .process-trace-block {
+        margin-top: 6px;
+    }
+    .process-trace-block pre {
+        margin: 4px 0 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+        line-height: 1.35;
+    }
+    .token-usage-meta {
+        margin-left: 8px;
+        color: var(--muted);
+        font-size: 12px;
+    }
     @media (max-width: 1200px) {
         .chat-main-layout {
-            grid-template-columns: 1fr;
+            --summary-drawer-width: min(360px, 88vw);
         }
-        .session-history {
-            max-height: 240px;
+        .session-history-drawer {
+            width: var(--summary-drawer-width);
+        }
+        .chat-main-layout.summary-drawer-open .summary-drawer-toggle {
+            right: calc(var(--summary-drawer-width) + 8px);
         }
     }
 </style>
@@ -92,6 +259,7 @@
     <main class="main-panel">
         <div class="top-actions">
             <div class="top-actions-left">
+                {% if show_llm_selector %}
                 <div class="custom-dropdown" id="llmDropdown" data-project-id="{{ current_project.id }}" data-csrf-token="{{ csrf_token }}">
                     <button type="button" class="chip llm-chip-btn" id="llmDropdownToggle" style="padding: 4px 8px;">
                         {{ current_llm_name }}
@@ -100,32 +268,96 @@
                         <!-- 动态填充 -->
                     </div>
                 </div>
+                {% else %}
+                <span class="chip">伙伴默认模型：{{ current_llm_name }}</span>
+                {% endif %}
             </div>
             <div class="top-actions-right">
                 <a class="chip" href="{% url 'requirement_file_list' %}">资源管理器</a>
                 {% if current_project %}
                 <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
                 {% endif %}
-                {% if active_session %}
-                <span class="chip">会话 #{{ active_session.id }}</span>
+                {% if chat_session %}
+                {% if is_companion_chat and companion_chat %}
+                <span class="chip">{{ companion_chat.display_name|default:companion_chat.name }}</span>
+                {% else %}
+                <span class="chip">主聊天 #{{ chat_session.id }}</span>
+                {% endif %}
+                {% if is_summary_view and active_session %}
+                <span class="chip">当前查看：{{ active_session.title|truncatechars:18 }}</span>
+                {% endif %}
                 {% endif %}
             </div>
         </div>
 
-        <div class="chat-main-layout">
+        <div class="chat-main-layout" id="chatMainLayout">
             <section class="conversation" id="conversationBox" data-has-active-session="{% if active_session %}1{% else %}0{% endif %}">
                 <div class="chat-track">
                     {% if active_session %}
                     <div class="panel" style="margin-bottom: 2px;">
-                        <strong>{{ active_session.title }}</strong>
+                        <strong>{% if is_companion_chat and companion_chat %}{{ companion_chat.display_name|default:companion_chat.name }}{% else %}{{ active_session.title }}{% endif %}</strong>
                         <div class="meta">创建时间：{{ active_session.created_at|date:"Y-m-d H:i" }}</div>
                     </div>
                     {% for message in messages %}
                     <div class="message-row {% if message.role == 'user' %}user{% else %}assistant{% endif %}">
                         <div class="bubble {% if message.role == 'user' %}bubble-user{% else %}bubble-assistant{% endif %}">
                             <div class="meta" style="margin-top: 0;">
-                                {% if message.role == "user" %}你{% else %}小柯{% endif %} · {{ message.created_at|date:"H:i:s" }}
+                                {% if message.role == "user" %}你{% elif is_companion_chat and companion_chat %}{{ companion_chat.display_name|default:companion_chat.name }}{% else %}助手{% endif %} · {{ message.created_at|date:"H:i:s" }}
+                                {% if message.role == "assistant" %}
+                                    {% if message.token_usage %}
+                                    <span class="token-usage-meta">Token: 输入 {{ message.token_usage.prompt_tokens|default:0 }} / 输出 {{ message.token_usage.completion_tokens|default:0 }} / 总计 {{ message.token_usage.total_tokens|default:0 }}</span>
+                                    {% else %}
+                                    <span class="token-usage-meta">Token: 无统计数据</span>
+                                    {% endif %}
+                                {% endif %}
                             </div>
+                            {% if message.role == "assistant" and message.process_trace_events %}
+                            <div class="process-trace-wrap">
+                                {% for event in message.process_trace_events %}
+                                <details class="process-trace-step">
+                                    <summary>
+                                        {{ forloop.counter }}. {{ event.title }} · {{ event.status }}
+                                        {% if event.ts %} · {{ event.ts }}{% endif %}
+                                        {% if event.kind == "llm_call" %}
+                                        · 大模型调用
+                                        {% elif event.kind == "code_call" %}
+                                        · 工具/代码调用
+                                        {% elif event.kind == "result" %}
+                                        · 结果写回
+                                        {% else %}
+                                        · 流程步骤
+                                        {% endif %}
+                                        {% if event.token_usage %}
+                                        · Token {{ event.token_usage.total_tokens|default:0 }}
+                                        {% endif %}
+                                    </summary>
+                                    {% if event.kind %}
+                                    <div class="process-trace-block"><strong>类型：</strong>
+                                        {% if event.kind == "llm_call" %}大模型调用
+                                        {% elif event.kind == "code_call" %}工具/代码调用
+                                        {% elif event.kind == "result" %}结果写回
+                                        {% else %}流程步骤{% endif %}
+                                    </div>
+                                    {% endif %}
+                                    {% if event.token_usage %}
+                                    <div class="process-trace-block">
+                                        <strong>Token：</strong>
+                                        输入 {{ event.token_usage.prompt_tokens|default:0 }} / 输出 {{ event.token_usage.completion_tokens|default:0 }} / 总计 {{ event.token_usage.total_tokens|default:0 }}
+                                    </div>
+                                    {% endif %}
+                                    {% if event.input %}
+                                    <div class="process-trace-block"><strong>输入：</strong><pre>{{ event.input }}</pre></div>
+                                    {% endif %}
+                                    {% if event.output %}
+                                    <div class="process-trace-block"><strong>输出：</strong><pre>{{ event.output }}</pre></div>
+                                    {% endif %}
+                                    {% if event.error %}
+                                    <div class="process-trace-block"><strong>错误：</strong><pre>{{ event.error }}</pre></div>
+                                    {% endif %}
+                                </details>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
                             <div class="message-text">
                                 {% if message.attachment %}
                                     {% if message.is_audio_attachment %}
@@ -146,7 +378,18 @@
                                     {% else %}{{ message.content|linebreaksbr }}{% endif %}
                                 {% endif %}
                             </div>
-                            {% if message.role == "user" and active_session %}
+                            {% if message.role == "user" and active_session and not is_summary_view %}
+                            {% if enable_summary_actions %}
+                            <form method="post" action="{% url 'session_extract_summary' chat_session.id message.id %}" style="margin-top: 8px; display: inline-block; margin-right: 6px;">
+                                {% csrf_token %}
+                                <button
+                                    type="submit"
+                                    class="chip llm-chip-btn icon-btn"
+                                    title="提炼总结会话"
+                                    aria-label="提炼总结会话"
+                                >摘</button>
+                            </form>
+                            {% endif %}
                             <form method="post" action="{% url 'session_rollback' active_session.id message.id %}" style="margin-top: 8px;">
                                 {% csrf_token %}
                                 <button
@@ -162,18 +405,26 @@
                     {% endfor %}
                     {% else %}
                     <div class="panel">
-                        <h2 style="margin-top: 0;">开始一条新的对话</h2>
+                        <h2 style="margin-top: 0;">开始聊天</h2>
                         <p style="color: var(--muted); margin-bottom: 0;">
-                            当前项目：<strong>{{ current_project.name }}</strong><br>
-                            需求文档将保存到：{{ current_project.or_path }}
+                            当前窗口展示你账号下的全部聊天记录。<br>
+                            发送消息会持续追加到主聊天会话。
                         </p>
                     </div>
                     {% endif %}
                 </div>
             </section>
 
-            <aside class="panel session-history">
-                <h3 class="history-title">历史会话</h3>
+            {% if enable_summary_drawer %}
+            <button type="button" class="chip llm-chip-btn summary-drawer-toggle" id="summaryDrawerToggle" aria-controls="summarySessionDrawer" aria-expanded="false">
+                展开总结会话
+            </button>
+            <button type="button" class="summary-drawer-backdrop" id="summaryDrawerBackdrop" aria-label="收起总结会话"></button>
+            <aside class="panel session-history session-history-drawer" id="summarySessionDrawer" aria-hidden="true">
+                <div class="summary-drawer-header">
+                    <h3 class="history-title">总结会话</h3>
+                    <button type="button" class="chip llm-chip-btn" id="summaryDrawerClose">收起</button>
+                </div>
                 <ul class="history-list">
                     {% for session in sessions %}
                     <li class="history-item">
@@ -191,19 +442,38 @@
                         </form>
                     </li>
                     {% empty %}
-                    <li><div class="meta">暂无历史会话</div></li>
+                    <li><div class="meta">暂无总结会话</div></li>
                     {% endfor %}
                 </ul>
             </aside>
+            {% endif %}
         </div>
 
+        {% if is_summary_view %}
+        <div class="panel" style="margin-top: 10px;">
+            <div class="meta">当前处于总结会话视图。继续聊天请返回主聊天会话。</div>
+            <a class="chip" href="{% url 'session_list' %}" style="margin-top: 8px; display: inline-block;">返回主聊天</a>
+        </div>
+        {% endif %}
+
         <section class="composer">
-            <form method="post" class="composer-form" action="{% if active_session %}{% url 'session_send' active_session.id %}{% else %}{% url 'session_create' %}{% endif %}" enctype="multipart/form-data">
+            <form
+                method="post"
+                class="composer-form"
+                id="chatComposerForm"
+                action="{% if chat_session %}{% url 'session_send' chat_session.id %}{% else %}{% url 'session_list' %}{% endif %}"
+                data-async-send-url="{% if chat_session %}{% url 'session_send_async' chat_session.id %}{% endif %}"
+                data-task-status-url-template="{% if chat_session %}{% url 'chat_reply_task_status' chat_session.id 0 %}{% endif %}"
+                data-task-stop-url-template="{% if chat_session %}{% url 'chat_reply_task_stop' chat_session.id 0 %}{% endif %}"
+                data-readonly="{% if is_summary_view %}1{% else %}0{% endif %}"
+                enctype="multipart/form-data"
+            >
                 {% csrf_token %}
                 <div class="chat-input-shell">
                     <button type="button" id="attachmentTrigger" class="input-icon-btn plus-btn" title="上传附件" aria-label="上传附件">+</button>
                     <div class="chat-input-main">
                         {{ message_form.content.as_widget }}
+                        <div id="mentionSuggestionBox" class="mention-suggestion-box is-hidden"></div>
                     </div>
                     <button type="button" id="speechRecognizeBtn" class="input-icon-btn mic-btn" title="语音识别" aria-label="语音识别">
                         <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
@@ -219,18 +489,21 @@
                 </div>
                 <input type="file" id="id_attachment" name="attachment" style="display: none;">
                 <div id="selectedAttachmentInfo" class="meta composer-attachment-info"></div>
-                <div id="voiceRecordStatus" class="meta composer-status">未开始语音输入</div>
+                <div class="composer-action-row">
+                    <div id="voiceRecordStatus" class="meta composer-status">未开始语音输入</div>
+                    <button type="submit" id="composerSubmitBtn" class="composer-submit-btn" {% if is_summary_view %}disabled{% endif %}>发送</button>
+                </div>
                 {% if rollback_draft and rollback_draft.attachment_path %}
                 <div class="meta" style="margin-top: 6px;">
                     回退附件：<span class="chip" style="padding: 2px 8px;">{{ rollback_draft.attachment_name }}</span>
                     <span style="margin-left: 8px;">发送时将自动带上该附件（可手动重新选择覆盖）</span>
                 </div>
                 {% endif %}
-                <button type="submit" class="composer-submit-btn">{% if active_session %}发送{% else %}发送并创建会话{% endif %}</button>
             </form>
         </section>
     </main>
 </div>
+{{ enabled_companions|json_script:"enabledCompanionsData" }}
 <script>
     (function () {
         const conversationBox = document.getElementById("conversationBox");
@@ -249,6 +522,46 @@
         requestAnimationFrame(() => {
             scrollToLatest();
             requestAnimationFrame(scrollToLatest);
+        });
+    })();
+
+    (function () {
+        const layout = document.getElementById("chatMainLayout");
+        const drawer = document.getElementById("summarySessionDrawer");
+        const toggleButton = document.getElementById("summaryDrawerToggle");
+        const closeButton = document.getElementById("summaryDrawerClose");
+        const backdrop = document.getElementById("summaryDrawerBackdrop");
+
+        if (!layout || !drawer || !toggleButton || !backdrop) {
+            return;
+        }
+
+        const setDrawerOpen = function (isOpen) {
+            const open = Boolean(isOpen);
+            layout.classList.toggle("summary-drawer-open", open);
+            toggleButton.setAttribute("aria-expanded", open ? "true" : "false");
+            drawer.setAttribute("aria-hidden", open ? "false" : "true");
+            toggleButton.textContent = open ? "收起总结会话" : "展开总结会话";
+        };
+
+        setDrawerOpen(false);
+
+        toggleButton.addEventListener("click", function () {
+            const nextOpen = toggleButton.getAttribute("aria-expanded") !== "true";
+            setDrawerOpen(nextOpen);
+        });
+        if (closeButton) {
+            closeButton.addEventListener("click", function () {
+                setDrawerOpen(false);
+            });
+        }
+        backdrop.addEventListener("click", function () {
+            setDrawerOpen(false);
+        });
+        document.addEventListener("keydown", function (event) {
+            if (event.key === "Escape") {
+                setDrawerOpen(false);
+            }
         });
     })();
 
@@ -274,6 +587,362 @@
         const attachmentTrigger = document.getElementById("attachmentTrigger");
         const attachmentInfo = document.getElementById("selectedAttachmentInfo");
         const speechBtn = document.getElementById("speechRecognizeBtn");
+        const mentionSuggestionBox = document.getElementById("mentionSuggestionBox");
+        const conversationBox = document.getElementById("conversationBox");
+        const enabledCompanionsDataElement = document.getElementById("enabledCompanionsData");
+        const enabledCompanions = enabledCompanionsDataElement ? JSON.parse(enabledCompanionsDataElement.textContent) : [];
+        const conversationTrack = document.querySelector(".chat-track");
+        const asyncSendUrl = form.dataset.asyncSendUrl || "";
+        const taskStatusUrlTemplate = form.dataset.taskStatusUrlTemplate || "";
+        const taskStopUrlTemplate = form.dataset.taskStopUrlTemplate || "";
+        const isReadonlyView = form.dataset.readonly === "1";
+        let mentionCandidates = [];
+        let mentionActiveIndex = 0;
+        let mentionAnchorIndex = -1;
+        let mentionCursorIndex = -1;
+        let activeTaskId = null;
+        let pollingTimer = null;
+        let currentAssistantMessageRefs = null;
+        let isAwaitingReply = false;
+
+        const getTaskUrl = function (template, taskId) {
+            if (!template || !taskId) {
+                return "";
+            }
+            return template.replace("/0/", `/${taskId}/`);
+        };
+
+        const toHtml = function (text) {
+            const escaped = String(text || "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;");
+            return escaped.replace(/\n/g, "<br>");
+        };
+
+        const normalizeTokenUsage = function (rawUsage) {
+            if (!rawUsage || typeof rawUsage !== "object") {
+                return null;
+            }
+            const toInt = function (value) {
+                if (typeof value === "number" && Number.isFinite(value)) {
+                    return Math.max(0, Math.floor(value));
+                }
+                if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+                    return parseInt(value.trim(), 10);
+                }
+                return null;
+            };
+            const prompt = toInt(rawUsage.prompt_tokens);
+            const completion = toInt(rawUsage.completion_tokens);
+            let total = toInt(rawUsage.total_tokens);
+            if (total === null && (prompt !== null || completion !== null)) {
+                total = (prompt || 0) + (completion || 0);
+            }
+            if (prompt === null && completion === null && total === null) {
+                return null;
+            }
+            return {
+                prompt_tokens: prompt || 0,
+                completion_tokens: completion || 0,
+                total_tokens: total || 0,
+            };
+        };
+
+        const formatTokenUsageLabel = function (rawUsage) {
+            const usage = normalizeTokenUsage(rawUsage);
+            if (!usage) {
+                return "Token: 无统计数据";
+            }
+            return `Token: 输入 ${usage.prompt_tokens} / 输出 ${usage.completion_tokens} / 总计 ${usage.total_tokens}`;
+        };
+
+        const formatEventKindLabel = function (kind) {
+            const normalized = String(kind || "").trim();
+            if (normalized === "llm_call") {
+                return "大模型调用";
+            }
+            if (normalized === "code_call") {
+                return "工具/代码调用";
+            }
+            if (normalized === "result") {
+                return "结果写回";
+            }
+            return "流程步骤";
+        };
+
+        const formatDataForHtml = function (value) {
+            if (value === null || value === undefined || value === "") {
+                return "";
+            }
+            if (typeof value === "string") {
+                return toHtml(value);
+            }
+            try {
+                return toHtml(JSON.stringify(value, null, 2));
+            } catch (error) {
+                return toHtml(String(value));
+            }
+        };
+
+        const normalizeTraceEventsFromStatus = function (data) {
+            if (data && data.process_trace && Array.isArray(data.process_trace.events)) {
+                return data.process_trace.events;
+            }
+            if (data && Array.isArray(data.plan_steps)) {
+                return data.plan_steps.map((step) => ({
+                    kind: "thinking",
+                    title: `步骤 ${step.step_id || ""}`,
+                    status: step.status || "success",
+                    input: { executor: step.executor, step_type: step.step_type },
+                    output: step.output,
+                    error: step.error || "",
+                    ts: "",
+                }));
+            }
+            return [];
+        };
+
+        const renderProcessTraceEvents = function (container, events) {
+            if (!container) {
+                return;
+            }
+            const eventList = Array.isArray(events) ? events : [];
+            if (!eventList.length) {
+                container.innerHTML = "";
+                return;
+            }
+            const itemHtml = eventList.map((event, index) => {
+                const inputHtml = formatDataForHtml(event.input);
+                const outputHtml = formatDataForHtml(event.output);
+                const errorHtml = formatDataForHtml(event.error);
+                return `
+                    <details class="process-trace-step">
+                        <summary>${index + 1}. ${toHtml(event.title || "步骤")} · ${toHtml(event.status || "success")}${event.ts ? ` · ${toHtml(event.ts)}` : ""} · ${toHtml(formatEventKindLabel(event.kind))}${normalizeTokenUsage(event.token_usage) ? ` · Token ${normalizeTokenUsage(event.token_usage).total_tokens}` : ""}</summary>
+                        ${event.kind ? `<div class="process-trace-block"><strong>类型：</strong>${toHtml(formatEventKindLabel(event.kind))}</div>` : ""}
+                        ${normalizeTokenUsage(event.token_usage) ? `<div class="process-trace-block"><strong>Token：</strong>${toHtml(formatTokenUsageLabel(event.token_usage).replace("Token: ", ""))}</div>` : ""}
+                        ${inputHtml ? `<div class="process-trace-block"><strong>输入：</strong><pre>${inputHtml}</pre></div>` : ""}
+                        ${outputHtml ? `<div class="process-trace-block"><strong>输出：</strong><pre>${outputHtml}</pre></div>` : ""}
+                        ${errorHtml ? `<div class="process-trace-block"><strong>错误：</strong><pre>${errorHtml}</pre></div>` : ""}
+                    </details>
+                `;
+            }).join("");
+            container.innerHTML = itemHtml;
+        };
+
+        const scrollConversationToBottom = function () {
+            if (!conversationBox) {
+                return;
+            }
+            conversationBox.scrollTop = conversationBox.scrollHeight;
+        };
+
+        const setAwaitingState = function (awaiting) {
+            isAwaitingReply = Boolean(awaiting);
+            if (!submitButton) {
+                return;
+            }
+            submitButton.disabled = false;
+            submitButton.textContent = isAwaitingReply ? "停止" : "发送";
+        };
+
+        const companionAssistantName = "{% if is_companion_chat and companion_chat %}{{ companion_chat.display_name|default:companion_chat.name|escapejs }}{% else %}助手{% endif %}";
+
+        const appendOptimisticMessageRow = function (role, content, createdAt, attachmentName) {
+            if (!conversationTrack) {
+                return null;
+            }
+            const messageRow = document.createElement("div");
+            messageRow.className = `message-row ${role === "user" ? "user" : "assistant"}`;
+            const bubble = document.createElement("div");
+            bubble.className = `bubble ${role === "user" ? "bubble-user" : "bubble-assistant"}`;
+
+            const meta = document.createElement("div");
+            meta.className = "meta";
+            meta.style.marginTop = "0";
+            meta.innerHTML = `${role === "user" ? "你" : companionAssistantName} · ${createdAt}`;
+            let tokenMetaNode = null;
+            if (role !== "user") {
+                tokenMetaNode = document.createElement("span");
+                tokenMetaNode.className = "token-usage-meta";
+                tokenMetaNode.textContent = "Token: 统计中...";
+                meta.appendChild(tokenMetaNode);
+            }
+
+            const textWrap = document.createElement("div");
+            textWrap.className = "message-text";
+            if (attachmentName) {
+                const attachmentLine = document.createElement("div");
+                attachmentLine.style.marginBottom = "6px";
+                attachmentLine.innerHTML = `<span class="chip">${toHtml(attachmentName)}</span>`;
+                textWrap.appendChild(attachmentLine);
+            }
+            const textNode = document.createElement("div");
+            textNode.innerHTML = toHtml(content || "");
+            textWrap.appendChild(textNode);
+
+            bubble.appendChild(meta);
+            let traceContainer = null;
+            if (role !== "user") {
+                traceContainer = document.createElement("div");
+                traceContainer.className = "process-trace-wrap";
+                bubble.appendChild(traceContainer);
+            }
+            bubble.appendChild(textWrap);
+            messageRow.appendChild(bubble);
+            conversationTrack.appendChild(messageRow);
+            scrollConversationToBottom();
+            return { textNode, traceContainer, tokenMetaNode };
+        };
+
+        const stopPollingTask = function () {
+            if (pollingTimer) {
+                clearInterval(pollingTimer);
+                pollingTimer = null;
+            }
+            activeTaskId = null;
+            currentAssistantMessageRefs = null;
+        };
+
+        const pollTaskStatus = function () {
+            if (!activeTaskId) {
+                return;
+            }
+            const statusUrl = getTaskUrl(taskStatusUrlTemplate, activeTaskId);
+            if (!statusUrl) {
+                stopPollingTask();
+                setAwaitingState(false);
+                return;
+            }
+            fetch(statusUrl)
+                .then(response => response.json())
+                .then(data => {
+                    if (!data || data.success !== true) {
+                        return;
+                    }
+                    if (currentAssistantMessageRefs && currentAssistantMessageRefs.textNode) {
+                        currentAssistantMessageRefs.textNode.innerHTML = toHtml(data.content || "");
+                        if (currentAssistantMessageRefs.tokenMetaNode) {
+                            currentAssistantMessageRefs.tokenMetaNode.textContent = formatTokenUsageLabel(data.token_usage);
+                        }
+                        renderProcessTraceEvents(
+                            currentAssistantMessageRefs.traceContainer,
+                            normalizeTraceEventsFromStatus(data)
+                        );
+                        scrollConversationToBottom();
+                    }
+                    if (data.is_done) {
+                        stopPollingTask();
+                        setAwaitingState(false);
+                    }
+                })
+                .catch(() => {
+                    // 轮询失败不立即中断，等待下一轮重试
+                });
+        };
+
+        const requestStopReplyTask = function () {
+            if (!activeTaskId) {
+                setAwaitingState(false);
+                return;
+            }
+            const stopUrl = getTaskUrl(taskStopUrlTemplate, activeTaskId);
+            if (!stopUrl) {
+                setAwaitingState(false);
+                return;
+            }
+            const formData = new FormData();
+            const csrfToken = form.querySelector("input[name='csrfmiddlewaretoken']");
+            if (csrfToken) {
+                formData.append("csrfmiddlewaretoken", csrfToken.value);
+            }
+            fetch(stopUrl, { method: "POST", body: formData })
+                .then(response => response.json())
+                .then(() => {
+                    setRecordStatus("已请求停止回复");
+                })
+                .catch(() => {
+                    setRecordStatus("停止请求失败，请稍后重试");
+                });
+        };
+
+        // 绑定表单提交事件
+        form.addEventListener("submit", function (event) {
+            if (isReadonlyView) {
+                event.preventDefault();
+                setRecordStatus("总结会话为只读，请返回主聊天继续发送");
+                return;
+            }
+            if (isRecording) {
+                event.preventDefault();
+                stopRecording();
+                setRecordStatus("请等待录音处理完成后再次发送");
+                return;
+            }
+            if (!asyncSendUrl) {
+                if (submitButton) {
+                    submitButton.disabled = true;
+                    submitButton.textContent = "正在发送...";
+                }
+                return;
+            }
+            event.preventDefault();
+            if (isAwaitingReply) {
+                requestStopReplyTask();
+                return;
+            }
+
+            const contentText = (textarea.value || "").trim();
+            const attachmentName = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0].name : "";
+            if (!contentText && !attachmentName) {
+                setRecordStatus("请输入消息内容或上传附件");
+                return;
+            }
+
+            const now = new Date();
+            const hh = String(now.getHours()).padStart(2, "0");
+            const mm = String(now.getMinutes()).padStart(2, "0");
+            const ss = String(now.getSeconds()).padStart(2, "0");
+            const timeText = `${hh}:${mm}:${ss}`;
+
+            appendOptimisticMessageRow("user", textarea.value || "", timeText, attachmentName);
+            currentAssistantMessageRefs = appendOptimisticMessageRow("assistant", "思考中...", timeText, "");
+            setAwaitingState(true);
+
+            const sendData = new FormData(form);
+            textarea.value = "";
+            if (fileInput) {
+                fileInput.value = "";
+            }
+            if (attachmentInfo) {
+                attachmentInfo.textContent = "";
+            }
+            hideMentionSuggestions();
+
+            fetch(asyncSendUrl, {
+                method: "POST",
+                body: sendData,
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (!data || data.success !== true) {
+                        throw new Error((data && data.error) || "发送失败");
+                    }
+                    activeTaskId = data.task_id;
+                    if (currentAssistantMessageRefs && currentAssistantMessageRefs.textNode && data.assistant_message) {
+                        currentAssistantMessageRefs.textNode.innerHTML = toHtml(data.assistant_message.content || "");
+                    }
+                    pollTaskStatus();
+                    pollingTimer = setInterval(pollTaskStatus, 1000);
+                })
+                .catch((error) => {
+                    if (currentAssistantMessageRefs && currentAssistantMessageRefs.textNode) {
+                        currentAssistantMessageRefs.textNode.innerHTML = toHtml(`发送失败：${error.message || "未知错误"}`);
+                    }
+                    stopPollingTask();
+                    setAwaitingState(false);
+                });
+        });
 
         // 绑定表单提交事件
         form.addEventListener("submit", function (event) {
@@ -292,12 +961,157 @@
         textarea.placeholder = "有问题，尽管问";
         textarea.rows = 1;
 
+        const hideMentionSuggestions = function () {
+            mentionCandidates = [];
+            mentionActiveIndex = 0;
+            mentionAnchorIndex = -1;
+            mentionCursorIndex = -1;
+            if (mentionSuggestionBox) {
+                mentionSuggestionBox.classList.add("is-hidden");
+                mentionSuggestionBox.innerHTML = "";
+            }
+        };
+
+        const applyMention = function (item) {
+            if (mentionAnchorIndex < 0 || mentionCursorIndex < 0) {
+                hideMentionSuggestions();
+                return;
+            }
+            const value = textarea.value || "";
+            const before = value.slice(0, mentionAnchorIndex);
+            const after = value.slice(mentionCursorIndex);
+            const inserted = `@${item.name} `;
+            textarea.value = `${before}${inserted}${after}`;
+            const nextCursor = before.length + inserted.length;
+            textarea.focus();
+            textarea.setSelectionRange(nextCursor, nextCursor);
+            hideMentionSuggestions();
+        };
+
+        const renderMentionSuggestions = function () {
+            if (!mentionSuggestionBox || !mentionCandidates.length) {
+                hideMentionSuggestions();
+                return;
+            }
+            mentionSuggestionBox.innerHTML = "";
+            mentionCandidates.forEach((item, index) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "mention-suggestion-item";
+                if (index === mentionActiveIndex) {
+                    button.classList.add("is-active");
+                }
+                button.innerHTML = `<div>${item.display_name}</div><div class="meta">@${item.name}</div>`;
+                button.addEventListener("mousedown", function (event) {
+                    event.preventDefault();
+                });
+                button.addEventListener("click", function () {
+                    applyMention(item);
+                });
+                mentionSuggestionBox.appendChild(button);
+            });
+            mentionSuggestionBox.classList.remove("is-hidden");
+        };
+
+        const getMentionQueryState = function () {
+            const cursor = textarea.selectionStart;
+            const value = textarea.value || "";
+            const beforeText = value.slice(0, cursor);
+            const atIndex = beforeText.lastIndexOf("@");
+            if (atIndex < 0) {
+                return null;
+            }
+            if (atIndex > 0) {
+                const prevChar = beforeText.charAt(atIndex - 1);
+                if (!/\s/.test(prevChar)) {
+                    return null;
+                }
+            }
+            const query = beforeText.slice(atIndex + 1);
+            if (/[\s]/.test(query)) {
+                return null;
+            }
+            return {
+                atIndex,
+                cursor,
+                query: query.toLowerCase(),
+            };
+        };
+
+        const updateMentionSuggestions = function () {
+            if (!enabledCompanions.length) {
+                hideMentionSuggestions();
+                return;
+            }
+            const state = getMentionQueryState();
+            if (!state) {
+                hideMentionSuggestions();
+                return;
+            }
+            const candidates = enabledCompanions.filter((item) => {
+                const name = String(item.name || "").toLowerCase();
+                const displayName = String(item.display_name || "").toLowerCase();
+                if (!state.query) {
+                    return true;
+                }
+                return name.includes(state.query) || displayName.includes(state.query);
+            });
+            if (!candidates.length) {
+                hideMentionSuggestions();
+                return;
+            }
+            mentionCandidates = candidates;
+            mentionActiveIndex = 0;
+            mentionAnchorIndex = state.atIndex;
+            mentionCursorIndex = state.cursor;
+            renderMentionSuggestions();
+        };
+
         // 绑定回车键
         textarea.addEventListener("keydown", function (event) {
-            if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                form.submit();
+            if (mentionCandidates.length && mentionSuggestionBox && !mentionSuggestionBox.classList.contains("is-hidden")) {
+                if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    mentionActiveIndex = (mentionActiveIndex + 1) % mentionCandidates.length;
+                    renderMentionSuggestions();
+                    return;
+                }
+                if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    mentionActiveIndex = (mentionActiveIndex - 1 + mentionCandidates.length) % mentionCandidates.length;
+                    renderMentionSuggestions();
+                    return;
+                }
+                if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+                    event.preventDefault();
+                    applyMention(mentionCandidates[mentionActiveIndex]);
+                    return;
+                }
+                if (event.key === "Escape") {
+                    event.preventDefault();
+                    hideMentionSuggestions();
+                    return;
+                }
             }
+            if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+                event.preventDefault();
+                if (typeof form.requestSubmit === "function") {
+                    form.requestSubmit();
+                } else {
+                    form.submit();
+                }
+            }
+        });
+        textarea.addEventListener("input", updateMentionSuggestions);
+        textarea.addEventListener("click", updateMentionSuggestions);
+        document.addEventListener("click", function (event) {
+            if (!mentionSuggestionBox) {
+                return;
+            }
+            if (event.target === textarea || mentionSuggestionBox.contains(event.target)) {
+                return;
+            }
+            hideMentionSuggestions();
         });
 
         textarea.addEventListener("paste", function (event) {
@@ -601,6 +1415,9 @@
         const dropdown = document.getElementById('llmDropdown');
         const toggleButton = document.getElementById('llmDropdownToggle');
         const menu = document.getElementById('llmDropdownMenu');
+        if (!dropdown || !toggleButton || !menu) {
+            return;
+        }
 
         let providers = [];
         menu.innerHTML = '<div class="dropdown-item" style="cursor: default;">加载中...</div>';

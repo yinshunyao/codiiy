@@ -1,15 +1,37 @@
 .sidebar-menu {
     gap: 10px;
+    min-height: 0;
 }
 .menu-tree {
-    display: grid;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
     gap: 8px;
     margin-bottom: 4px;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(156, 167, 195, 0.55) transparent;
+}
+.menu-tree::-webkit-scrollbar {
+    width: 8px;
+}
+.menu-tree::-webkit-scrollbar-track {
+    background: transparent;
+}
+.menu-tree::-webkit-scrollbar-thumb {
+    background: rgba(156, 167, 195, 0.45);
+    border-radius: 999px;
+}
+.menu-tree::-webkit-scrollbar-thumb:hover {
+    background: rgba(156, 167, 195, 0.7);
 }
 .menu-section {
     border: 1px solid var(--line);
     border-radius: 12px;
     background: var(--menu-section-bg);
+    overflow: hidden;
 }
 .menu-section-toggle {
     width: 100%;
@@ -34,6 +56,11 @@
 }
 .menu-section.is-open .menu-section-body {
     display: block;
+}
+.menu-section:not(.is-open) .menu-section-body {
+    display: none;
+    padding: 0;
+    margin: 0;
 }
 .menu-section-body .menu-item-link + .menu-item-link {
     margin-top: 6px;
@@ -81,6 +108,67 @@
     background: var(--panel-2);
     color: var(--text);
     text-decoration: none;
+}
+.friend-list {
+    margin-top: 6px;
+    border-top: 1px dashed var(--line);
+    padding-top: 6px;
+}
+.friend-item {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 8px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    color: var(--text);
+    text-decoration: none;
+}
+.friend-item:hover,
+.friend-item.active {
+    background: var(--panel-2);
+    border-color: var(--line);
+    text-decoration: none;
+}
+.friend-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--menu-item-add-bg);
+}
+.friend-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.friend-name {
+    font-size: 13px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.friend-summary {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.friend-time {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
 }
 .user-card {
     margin-top: auto;

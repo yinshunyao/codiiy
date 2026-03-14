@@ -1,5 +1,6 @@
 import importlib
 import importlib.metadata
+import inspect
 import json
 import logging
 import os
@@ -7,7 +8,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 
 logging.basicConfig(
@@ -64,6 +65,10 @@ class ComponentCallTool:
     ) -> Dict[str, Any]:
         """通过字符串路径调用 component 函数。"""
         try:
+            permission_result = self._check_system_permissions(function_path=function_path)
+            if not permission_result["success"]:
+                return permission_result
+
             ensure_result = self.ensure_dependencies(function_path=function_path)
             if not ensure_result["success"]:
                 return ensure_result
@@ -79,6 +84,66 @@ class ComponentCallTool:
         except Exception as exc:
             logger.exception("control_call failed")
             return {"success": False, "error": str(exc)}
+
+    def _check_system_permissions(self, function_path: str) -> Dict[str, Any]:
+        """
+        按组件声明校验必需系统权限（required=true）。
+
+        仅在 Django 权限存储可用时执行强拦截；不可用时按降级策略放行。
+        """
+        component_key = self._resolve_component_key(function_path=function_path)
+        if not component_key:
+            return {"success": True, "data": {"permission_checked": False, "reason": "function_not_managed"}}
+
+        required_permission_keys = self._load_component_required_permission_keys(component_key=component_key)
+        if not required_permission_keys:
+            return {"success": True, "data": {"permission_checked": False, "reason": "no_required_permissions"}}
+
+        grant_model = self._load_permission_grant_model()
+        if grant_model is None:
+            return {
+                "success": True,
+                "data": {
+                    "permission_checked": False,
+                    "reason": "permission_storage_unavailable",
+                    "component_key": component_key,
+                },
+            }
+
+        granted_keys = self._query_granted_permission_keys(
+            grant_model=grant_model,
+            component_key=component_key,
+            permission_keys=required_permission_keys,
+        )
+        if granted_keys is None:
+            return {
+                "success": True,
+                "data": {
+                    "permission_checked": False,
+                    "reason": "permission_storage_query_failed",
+                    "component_key": component_key,
+                },
+            }
+
+        missing_keys = [key for key in required_permission_keys if key not in granted_keys]
+        if missing_keys:
+            return {
+                "success": False,
+                "error": f"组件缺少必需系统权限确认: {component_key}",
+                "data": {
+                    "component_key": component_key,
+                    "missing_permissions": missing_keys,
+                },
+            }
+
+        return {
+            "success": True,
+            "data": {
+                "permission_checked": True,
+                "component_key": component_key,
+                "required_permissions": required_permission_keys,
+            },
+        }
 
     # 兼容旧方法名
     def call_control_function(
@@ -235,6 +300,105 @@ class ComponentCallTool:
             raise FileNotFoundError(f"组件目录不存在: {component_dir}")
         return component_dir
 
+    def _resolve_component_key(self, function_path: str) -> str:
+        component_index = self._read_component_index()
+        function_to_component = component_index.get("function_to_component", {})
+        if not isinstance(function_to_component, dict):
+            return ""
+        component_key = function_to_component.get(function_path)
+        if not isinstance(component_key, str):
+            return ""
+        return component_key.strip()
+
+    def _load_component_required_permission_keys(self, component_key: str) -> List[str]:
+        module_name = str(component_key or "").split(".", 1)[0].strip()
+        if not module_name:
+            return []
+        readme_path = self.component_dir / module_name / "README.json"
+        if not readme_path.exists():
+            return []
+
+        try:
+            payload = json.loads(readme_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        if not isinstance(payload, dict):
+            return []
+
+        components = payload.get("components", [])
+        if not isinstance(components, list):
+            return []
+
+        target_item = None
+        for item in components:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("component_key") or "").strip() == component_key:
+                target_item = item
+                break
+        if not isinstance(target_item, dict):
+            return []
+
+        permission_schema = target_item.get("system_permission_schema")
+        if not isinstance(permission_schema, dict):
+            return []
+        if not bool(permission_schema.get("enabled")):
+            return []
+
+        permissions = permission_schema.get("permissions", [])
+        if not isinstance(permissions, list):
+            return []
+
+        required_keys: List[str] = []
+        for item in permissions:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").strip()
+            if not key:
+                continue
+            if not bool(item.get("required")):
+                continue
+            if key in required_keys:
+                continue
+            required_keys.append(key)
+        return required_keys
+
+    @staticmethod
+    def _load_permission_grant_model():
+        try:
+            from django.apps import apps
+            from django.conf import settings
+        except Exception:
+            return None
+
+        try:
+            if not settings.configured:
+                return None
+            if not apps.ready:
+                return None
+            return apps.get_model("collector", "ComponentSystemPermissionGrant")
+        except Exception:
+            return None
+
+    @staticmethod
+    def _query_granted_permission_keys(
+        grant_model,
+        component_key: str,
+        permission_keys: List[str],
+    ) -> Optional[Set[str]]:
+        try:
+            records = grant_model.objects.filter(
+                component_key=component_key,
+                permission_key__in=permission_keys,
+            ).only("permission_key", "is_granted")
+            return {
+                str(item.permission_key).strip()
+                for item in records
+                if bool(getattr(item, "is_granted", False))
+            }
+        except Exception:
+            return None
+
     def _read_component_index(self) -> Dict[str, Any]:
         index_path = self.component_dir / "component_index.json"
         if not index_path.exists():
@@ -303,9 +467,50 @@ class ComponentCallTool:
         return env_value in {"1", "true", "yes", "on"}
 
     def _invoke_control_function(self, function_path: str, kwargs: Dict[str, Any]) -> Any:
-        from component import call_by_path
+        from component import resolve_function
 
-        return call_by_path(function_path=function_path, kwargs=kwargs)
+        func = resolve_function(function_path=function_path)
+        safe_kwargs, dropped_keys = self._sanitize_kwargs_for_function(func=func, raw_kwargs=kwargs)
+        if dropped_keys:
+            logger.warning(
+                "过滤不匹配参数: function=%s, dropped=%s",
+                function_path,
+                dropped_keys,
+            )
+        return func(**safe_kwargs)
+
+    @staticmethod
+    def _sanitize_kwargs_for_function(func, raw_kwargs: Optional[Dict[str, Any]]) -> tuple[Dict[str, Any], List[str]]:
+        kwargs = raw_kwargs or {}
+        if not isinstance(kwargs, dict):
+            raise TypeError("kwargs 必须是 dict")
+
+        try:
+            signature = inspect.signature(func)
+        except (TypeError, ValueError):
+            # 无法解析签名时保持原样，避免误伤。
+            return dict(kwargs), []
+
+        parameters = signature.parameters
+        accepts_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+        )
+        if accepts_var_kwargs:
+            return dict(kwargs), []
+
+        allowed_keys = {
+            name
+            for name, parameter in parameters.items()
+            if parameter.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+        }
+        safe_kwargs: Dict[str, Any] = {}
+        dropped_keys: List[str] = []
+        for key, value in kwargs.items():
+            if key in allowed_keys:
+                safe_kwargs[key] = value
+            else:
+                dropped_keys.append(str(key))
+        return safe_kwargs, dropped_keys
 
 # 兼容旧类名，避免已有调用报错
 ControlCallTool = ComponentCallTool

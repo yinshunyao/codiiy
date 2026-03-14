@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}大模型API配置{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-model-api {
+        grid-template-columns: 260px 1fr;
+    }
+    .model-api-item {
+        margin-bottom: 12px;
+    }
+    .model-api-overview {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(180px, 1fr));
+        gap: 10px;
+    }
+    .model-api-kpi {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        background: var(--panel-2);
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+
+<div class="app-shell app-shell-model-api">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">配置总数：{{ api_config_total }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'llm_api_config_create' %}">+ 新增API配置</a>
+                <a class="chip" href="{% url 'session_list' %}">返回对话页</a>
+            </div>
+        </div>
+
+        <section class="panel">
+            <div class="meta">用于配置云端大模型接口参数与 API Key。API Key 在列表中默认脱敏展示。</div>
+            <div class="model-api-overview" style="margin-top: 10px;">
+                <div class="model-api-kpi">
+                    <strong>{{ api_config_total }}</strong>
+                    <div class="meta">总配置数</div>
+                </div>
+                <div class="model-api-kpi">
+                    <strong>阿里 / 火山 / 腾讯 / 华为</strong>
+                    <div class="meta">支持预设快速填充</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="conversation panel" style="margin-top: 12px;">
+            {% if api_config_items %}
+                {% for item in api_config_items %}
+                <div class="panel model-api-item">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+                        <div style="min-width: 0;">
+                            <div><strong>{{ item.name }}</strong>{% if not item.is_enabled %}<span class="meta">（已停用）</span>{% endif %}</div>
+                            <div class="meta">厂商：{{ item.provider_name }}</div>
+                            <div class="meta">Base URL：{{ item.base_url|default:"未配置" }}</div>
+                            <div class="meta">默认模型：{{ item.default_model_id|default:"未配置" }}</div>
+                            <div class="meta">API Key：{{ item.masked_api_key|default:"未配置" }}</div>
+                            <div class="meta">更新时间：{{ item.updated_at|date:"Y-m-d H:i" }}</div>
+                        </div>
+                        <div style="white-space: nowrap; display: flex; gap: 8px;">
+                            <a class="chip" href="{% url 'llm_api_config_edit' item.id %}">编辑</a>
+                            <form method="post" action="{% url 'llm_api_config_delete' item.id %}" onsubmit="return confirm('确定删除该配置吗？');">
+                                {% csrf_token %}
+                                <button type="submit" class="chip">删除</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="panel">
+                    <div>当前没有大模型 API 配置。</div>
+                    <div style="margin-top: 10px;">
+                        <a class="chip" href="{% url 'llm_api_config_create' %}">立即新增</a>
+                    </div>
+                </div>
+            {% endif %}
+        </section>
+    </main>
+</div>
+
+<script>
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

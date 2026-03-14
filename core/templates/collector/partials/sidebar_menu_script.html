@@ -1,16 +1,40 @@
 (function () {
-    const menuSections = document.querySelectorAll("[data-menu-section]");
+    const menuSections = Array.from(document.querySelectorAll("[data-menu-section]"));
+
+    function updateMark(section) {
+        const mark = section.querySelector(".menu-toggle-mark");
+        if (!mark) {
+            return;
+        }
+        mark.textContent = section.classList.contains("is-open") ? "-" : "+";
+    }
+
+    function closeOthers(currentSection) {
+        menuSections.forEach((section) => {
+            if (section === currentSection) {
+                return;
+            }
+            section.classList.remove("is-open");
+            updateMark(section);
+        });
+    }
+
+    const openSections = menuSections.filter((section) => section.classList.contains("is-open"));
+    if (openSections.length > 1) {
+        const preferredOpenSection = openSections.find((section) => section.querySelector(".menu-item-link.active, .friend-item.active")) || openSections[0];
+        closeOthers(preferredOpenSection);
+    }
+    menuSections.forEach((section) => updateMark(section));
+
     menuSections.forEach((section) => {
         const toggle = section.querySelector("[data-menu-toggle]");
-        const mark = section.querySelector(".menu-toggle-mark");
         if (!toggle) {
             return;
         }
         toggle.addEventListener("click", () => {
-            section.classList.toggle("is-open");
-            if (mark) {
-                mark.textContent = section.classList.contains("is-open") ? "-" : "+";
-            }
+            closeOthers(section);
+            section.classList.add("is-open");
+            updateMark(section);
         });
     });
 })();

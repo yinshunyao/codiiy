@@ -176,12 +176,14 @@
    - 组件配置页新增“系统权限配置”区块，展示权限清单与当前确认状态；
    - 用户在页面中对权限项执行“已授予/未授予”确认，保存到 Django 数据库。
 3. 运行时校验：
-   - 测试页执行 API 前，校验组件 `required=true` 的权限是否已确认；
-   - 未确认时拒绝执行，返回缺失权限及配置入口；
+   - 统一在组件调用入口执行校验：凡通过 `tools/component_call_tool.ComponentCallTool.control_call` 发起的组件调用，都必须在执行前校验目标组件 `required=true` 的权限是否已确认；
+   - 测试页执行 API 前仍保留前置提示校验，但最终以 `ComponentCallTool` 运行时拦截为准，避免其他调用链路（如 orchestration/mindforge/tool）绕过；
+   - 未确认时拒绝执行，返回缺失权限信息（含 permission key 列表）；
    - 已确认后才允许进入组件调用。
 4. 职责边界：
    - Django 页面仅提供权限声明、状态记录与操作指引；
-   - OS 真正提权必须由用户在系统设置中完成。
+   - OS 真正提权必须由用户在系统设置中完成；
+   - 权限校验策略由 `ComponentCallTool` 统一收口，业务编排层不重复实现权限判断逻辑。
 
 ### 5.9 迁移一致性与降级策略
 为避免新功能上线后因数据库迁移未执行导致页面 500，需增加迁移一致性降级机制：
@@ -380,6 +382,48 @@
    - 路径解析必须限制在目标模块目录范围内（如 `agents/mindforge`、`agents/helm`）；
    - 目录不存在、压缩包不合法、解压失败等场景返回可读错误，不返回 500。
 
+### 5.18 tools 工具集管理器（manager）统一规范
+为满足“工具集管理逻辑与组件管理逻辑对齐，且便于 AI 稳定阅读与调用”的需求，新增以下规则：
+1. 目录与命名约束：
+   - `tools` 顶层必须提供 `tools/manager.py`，作为工具集统一管理入口；
+   - `component` 顶层必须提供 `component/manager.py`，作为组件统一管理入口；
+   - 历史管理实现若位于子目录（如 `tools/toolset_manager`）应迁移或降级为兼容壳，禁止继续作为主实现入口。
+2. 方法命名统一约束（面向 manager）：
+   - 查询清单统一使用 `list_*` 前缀；
+   - 查询单项状态统一使用 `get_*_enabled` 前缀；
+   - 更新单项状态统一使用 `set_*_enabled` 前缀；
+   - 查询映射统一使用 `get_*_key_by_*` 前缀（若存在映射场景）；
+   - 方法名采用小写下划线，保持与顶层 `component/manager.py` 风格一致。
+3. 数据与状态策略：
+   - 工具集基础信息以 `tools` 目录扫描结果为主（目录名、README 摘要、关键模块文件、支持系统）；
+   - 工具集启停状态独立存储在 `tools/toolset_state.json`，默认值为启用（`True`）；
+   - 当工具目录不存在、README 缺失或解析失败时，按“可读降级”返回，不允许抛未处理异常到页面层。
+4. Django 集成约束：
+   - 工具集页面不再在 `views.py` 内散落目录扫描逻辑，统一通过 `tools.manager` 读取；
+   - 视图层仅负责参数归一化、筛选条件传递和页面渲染，不负责工具目录元数据解析细节。
+5. 兼容与边界：
+   - 历史工具目录无需强制改名，管理器按目录扫描与约定字段兼容；
+   - 缺失“支持操作系统”声明的工具按全平台可见降级；
+   - 本阶段只落地“管理与读取能力”，不改变既有工具具体业务执行链路。
+
+### 5.19 agents 智能体管理器（manager）统一规范
+为满足“智能体目录与工具/组件保持同一治理模型”的需求，新增以下规则：
+1. 目录与命名约束：
+   - `agents` 顶层必须提供 `agents/manager.py`，作为智能体统一管理入口；
+   - 智能体管理主实现禁止散落在视图层，页面与业务代码需通过 `agents.manager` 访问；
+   - 管理 API 命名统一遵循 `list_*`、`get_*_enabled`、`set_*_enabled`、`get_*_key_by_*`。
+2. 数据与状态策略：
+   - 智能体项基础信息来源于 `agents/<module>` 目录扫描（名称、目录、README 摘要、关键文件、更新时间）；
+   - 智能体模块启停状态独立存储为 `agents/agent_state.json`；
+   - 未显式写入状态的模块默认启用（`True`）。
+3. Django 集成约束：
+   - 智能体项列表页与导入/导出流程中的目录解析与校验，统一复用 `agents.manager`；
+   - `views.py` 不再维护智能体目录扫描细节，只保留请求参数处理与页面渲染。
+4. 兼容与边界：
+   - 已有智能体模块目录结构保持不变（如 `agents/mindforge`、`agents/helm`）；
+   - README 缺失时按可读降级返回，不影响列表加载；
+   - 本阶段不改变既有智能体执行链路，仅补齐管理与查询统一入口。
+
 ## 6. 组件注册与兼容映射
 ### 6.1 注册索引文件
 新增 `component/component_index.json`，作为组件层元数据源，包含：
@@ -463,6 +507,15 @@
 29. 验证组件功能页“操作系统”筛选默认值等于当前运行系统，且可切换 `all/macos/linux/windows`。
 30. 验证工具集页可读取工具 README 的“支持操作系统”字段并按系统筛选。
 31. 验证仅系统专属组件（如 macOS 终端）在非匹配系统筛选下被正确隐藏。
+32. 验证 `tools/manager.py` 与 `component/manager.py` 作为顶层管理入口可直接提供对外服务。
+33. 验证工具集页通过 `tools.manager` 返回列表与统计，视图层不再直接扫描 `tools` 目录。
+34. 验证 `tools/toolset_state.json` 在首次写入时自动创建，且状态读写可追踪。
+35. 验证工具 README 缺失或 OS 声明缺失时可按降级规则展示，不影响页面可用性。
+36. 验证 `agents/manager.py` 可提供智能体模块与智能体项管理 API（list/get/set/get_key）。
+37. 验证智能体项列表页通过 `agents.manager` 返回列表结果，视图层不再直接扫描 `agents` 目录。
+38. 验证 `agents/agent_state.json` 在首次写入时自动创建，且模块启停状态可读写。
+39. 验证 `ComponentCallTool.control_call` 在组件存在 `system_permission_schema.required=true` 且权限未确认时拒绝执行（包括 orchestration/mindforge/tool 链路）。
+40. 验证权限存储不可用（如迁移未执行或 ORM 不可用）时，按降级策略不阻断调用并返回可读原因。
 
 ## 12. control/agents ReAct 引擎设计
 ### 12.1 目标与边界

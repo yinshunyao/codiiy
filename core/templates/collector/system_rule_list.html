@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}规则列表{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-system {
+        grid-template-columns: 260px 1fr;
+    }
+    .system-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+    }
+    .system-search-form {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0;
+    }
+    .system-search-input {
+        width: 50%;
+        min-width: 260px;
+        height: 36px;
+        box-sizing: border-box;
+    }
+    .system-item {
+        margin-bottom: 12px;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+
+<div class="app-shell app-shell-system">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">规则总数：{{ rule_total }}</span>
+                <span class="chip">匹配：{{ rule_filtered }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'session_list' %}">返回对话页</a>
+            </div>
+        </div>
+
+        <section class="panel">
+            <div class="system-toolbar">
+                <form method="get" action="{% url 'system_rule_list' %}" class="system-search-form">
+                    <input type="text" name="q" value="{{ rule_keyword }}" placeholder="按规则文件名 / 路径 / 摘要筛选" class="system-search-input">
+                    <button type="submit">搜索</button>
+                    {% if rule_keyword %}
+                    <a class="chip" href="{% url 'system_rule_list' %}">清空</a>
+                    {% endif %}
+                </form>
+            </div>
+            <div class="meta">信息来源：`.cursor/rules` 目录。</div>
+        </section>
+
+        <section class="conversation panel" style="margin-top: 12px;">
+            {% if rule_items %}
+                {% for item in rule_items %}
+                <div class="panel system-item">
+                    <div>
+                        <a href="{% url 'system_rule_detail' %}?path={{ item.detail_path|urlencode }}"><strong>{{ item.name }}</strong></a>
+                    </div>
+                    <div class="meta">路径：<a href="{% url 'system_rule_detail' %}?path={{ item.detail_path|urlencode }}">{{ item.path }}</a></div>
+                    <div class="meta">更新时间：{{ item.updated_at|date:"Y-m-d H:i" }}</div>
+                    <div class="meta">摘要：{{ item.summary }}</div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="panel">当前没有匹配的规则。</div>
+            {% endif %}
+        </section>
+    </main>
+</div>
+
+<script>
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

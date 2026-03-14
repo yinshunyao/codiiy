@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block title %}智能体项列表{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-agent {
+        grid-template-columns: 260px 1fr;
+    }
+    .agent-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+    }
+    .agent-search-form {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0;
+    }
+    .agent-search-input {
+        width: 50%;
+        min-width: 260px;
+        height: 36px;
+        box-sizing: border-box;
+    }
+    .agent-toolbar-btn {
+        height: 36px;
+        padding: 0 14px;
+        line-height: 36px;
+    }
+    .agent-item {
+        margin-bottom: 12px;
+    }
+    .agent-card-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+
+<div class="app-shell app-shell-agent">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">智能体模块：{{ agent_module_name }}（{{ agent_active_module }}）</span>
+                <span class="chip">总数：{{ agent_total }}</span>
+                <span class="chip">匹配：{{ agent_filtered }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'session_list' %}">返回对话页</a>
+            </div>
+        </div>
+
+        <section class="panel">
+            <div class="agent-toolbar">
+                <form method="get" action="{% url 'agent_item_list' agent_active_module %}" class="agent-search-form">
+                    <input type="text" name="q" value="{{ agent_keyword }}" placeholder="按智能体项名 / 路径 / 摘要筛选" class="agent-search-input">
+                    <select name="search_engine" class="agent-toolbar-btn">
+                        {% for option in search_engine_options %}
+                        <option value="{{ option.value }}" {% if option.value == search_engine %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <select name="search_mode" class="agent-toolbar-btn">
+                        {% for option in search_mode_options %}
+                        <option value="{{ option.value }}" {% if option.value == search_mode %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="agent-toolbar-btn">搜索</button>
+                    <button type="button" id="upload-agent-trigger-btn" class="agent-toolbar-btn">导入智能体项</button>
+                    {% if agent_keyword %}
+                    <a class="chip" href="{% url 'agent_item_list' agent_active_module %}?search_engine={{ search_engine }}&search_mode={{ search_mode }}">清空</a>
+                    {% endif %}
+                </form>
+            </div>
+            <div class="meta">信息来源：`agents/{{ agent_active_module }}` 目录。</div>
+            {% if agent_keyword %}
+            <div class="meta" style="margin-top: 6px;">检索引擎：{{ search_debug_meta.engine_used }}{% if search_debug_meta.fallback_used %}（已降级）{% endif %}{% if search_debug_meta.error %}，错误：{{ search_debug_meta.error }}{% endif %}</div>
+            {% endif %}
+            <div class="meta" style="margin-top: 8px;">
+                导入说明：仅支持 `.zip`，压缩包必须只包含一个智能体目录；导入后自动解压到 `agents/{{ agent_active_module }}/<item_name>` 目录。
+            </div>
+            <form method="post" action="{% url 'agent_item_upload' agent_active_module %}" enctype="multipart/form-data" id="agent-zip-upload-form" style="display: none;">
+                {% csrf_token %}
+                <input type="file" name="zip_file" id="agent-zip-file-input" accept=".zip" required>
+            </form>
+        </section>
+
+        <section class="conversation panel" style="margin-top: 12px;">
+            {% if search_llm_preview %}
+            <div class="panel agent-item">
+                <div><strong>LLM 检索测试预览（Top {{ search_llm_preview|length }}）</strong></div>
+                <pre style="margin: 8px 0 0; white-space: pre-wrap;">{{ search_llm_preview }}</pre>
+            </div>
+            {% endif %}
+            {% if agent_items %}
+                {% for item in agent_items %}
+                <div class="panel agent-item">
+                    <div class="agent-card-header">
+                        <div style="min-width: 0;">
+                            <div><strong>{{ item.name }}</strong></div>
+                            <div class="meta">目录：{{ item.directory }}</div>
+                            <div class="meta">README.md：{% if item.readme_exists %}已存在{% else %}缺失{% endif %}</div>
+                            <div class="meta">更新时间：{{ item.updated_at|date:"Y-m-d H:i" }}</div>
+                            <div class="meta">摘要：{{ item.summary }}</div>
+                            {% if item.search_score %}
+                            <div class="meta">检索得分：{{ item.search_score|floatformat:4 }}</div>
+                            {% endif %}
+                        </div>
+                        <div style="white-space: nowrap;">
+                            <a class="chip" href="{% url 'agent_item_download' agent_active_module item.name %}">导出</a>
+                        </div>
+                    </div>
+                    <div style="margin-top: 8px;">
+                        <div class="meta">关键文件：</div>
+                        {% if item.key_files %}
+                        <pre style="margin: 6px 0 0; white-space: pre-wrap;">{{ item.key_files|join:", " }}</pre>
+                        {% else %}
+                        <div class="meta">当前目录下暂无可展示文件</div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="panel">当前没有匹配的智能体项。</div>
+            {% endif %}
+        </section>
+    </main>
+</div>
+
+<script>
+    (function bindAgentZipUpload() {
+        const triggerBtn = document.getElementById("upload-agent-trigger-btn");
+        const fileInput = document.getElementById("agent-zip-file-input");
+        const uploadForm = document.getElementById("agent-zip-upload-form");
+        if (!triggerBtn || !fileInput || !uploadForm) {
+            return;
+        }
+        triggerBtn.addEventListener("click", function () {
+            fileInput.click();
+        });
+        fileInput.addEventListener("change", function () {
+            if (fileInput.files && fileInput.files.length > 0) {
+                uploadForm.submit();
+            }
+        });
+    })();
+
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

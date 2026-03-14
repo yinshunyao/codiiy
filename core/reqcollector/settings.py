@@ -15,7 +15,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "collector",
+    "collector.apps.CollectorConfig",
 ]
 
 MIDDLEWARE = [
@@ -90,3 +90,29 @@ LOGOUT_REDIRECT_URL = "login"
 # 大模型配置
 QWEN_API_KEY = os.getenv("QWEN_API_KEY", "")
 QWEN_MODEL = os.getenv("QWEN_MODEL", "qwen-plus")
+try:
+    CHAT_CONTEXT_MESSAGE_LIMIT = int(os.getenv("CHAT_CONTEXT_MESSAGE_LIMIT", "50"))
+except ValueError:
+    CHAT_CONTEXT_MESSAGE_LIMIT = 50
+try:
+    CHAT_REPLY_EMIT_CHUNK_SIZE = int(os.getenv("CHAT_REPLY_EMIT_CHUNK_SIZE", "120"))
+except ValueError:
+    CHAT_REPLY_EMIT_CHUNK_SIZE = 120
+try:
+    CHAT_REPLY_EMIT_INTERVAL_SECONDS = float(os.getenv("CHAT_REPLY_EMIT_INTERVAL_SECONDS", "1"))
+except ValueError:
+    CHAT_REPLY_EMIT_INTERVAL_SECONDS = 1.0
+COMPANION_CAPABILITY_SEARCH_MODE = str(os.getenv("COMPANION_CAPABILITY_SEARCH_MODE", "hybrid")).strip().lower() or "hybrid"
+if COMPANION_CAPABILITY_SEARCH_MODE not in {"traditional", "vector", "hybrid"}:
+    COMPANION_CAPABILITY_SEARCH_MODE = "hybrid"
+
+# 本地模型服务自动启动配置
+LOCAL_LLM_AUTO_START = str(os.getenv("LOCAL_LLM_AUTO_START", "1")).strip().lower() in {"1", "true", "yes", "on"}
+LOCAL_LLM_AUTO_START_ON_DJANGO_STARTUP = str(
+    os.getenv("LOCAL_LLM_AUTO_START_ON_DJANGO_STARTUP", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
+try:
+    LOCAL_LLM_AUTO_START_TIMEOUT_SECONDS = float(os.getenv("LOCAL_LLM_AUTO_START_TIMEOUT_SECONDS", "20"))
+except ValueError:
+    LOCAL_LLM_AUTO_START_TIMEOUT_SECONDS = 20.0
+LOCAL_LLM_OLLAMA_COMMAND = str(os.getenv("LOCAL_LLM_OLLAMA_COMMAND", "ollama serve")).strip() or "ollama serve"

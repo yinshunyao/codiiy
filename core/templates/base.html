@@ -34,6 +34,9 @@
             --menu-section-hover-bg: rgba(255, 255, 255, 0.04);
             --menu-item-add-bg: rgba(255, 255, 255, 0.02);
             --user-chip-bg: rgba(255, 255, 255, 0.02);
+            --button-bg: var(--panel-2);
+            --button-hover-bg: #232a3a;
+            --button-text: var(--text);
         }
         body[data-theme="light"] {
             --bg: #f4f7fb;
@@ -64,6 +67,9 @@
             --menu-section-hover-bg: rgba(0, 0, 0, 0.04);
             --menu-item-add-bg: rgba(0, 0, 0, 0.02);
             --user-chip-bg: rgba(0, 0, 0, 0.02);
+            --button-bg: var(--panel-2);
+            --button-hover-bg: #e4ebf7;
+            --button-text: var(--text);
         }
         * { box-sizing: border-box; }
         body {
@@ -118,16 +124,16 @@
         .nav-action {
             display: block;
             width: 100%;
-            background: var(--primary);
-            color: #fff;
-            border: none;
+            background: var(--button-bg);
+            color: var(--button-text);
+            border: 1px solid var(--line);
             border-radius: 10px;
             padding: 10px 12px;
             text-align: center;
             cursor: pointer;
             margin-bottom: 12px;
         }
-        .nav-action:hover { background: var(--primary-hover); text-decoration: none; }
+        .nav-action:hover { background: var(--button-hover-bg); text-decoration: none; }
         .nav-list {
             margin: 0;
             padding: 0;
@@ -415,12 +421,12 @@
 
         button {
             cursor: pointer;
-            background-color: var(--primary);
-            color: white;
+            background-color: var(--button-bg);
+            color: var(--button-text);
         }
 
         button:hover {
-            background-color: var(--primary-hover);
+            background-color: var(--button-hover-bg);
         }
 
         /* Style for file input */
@@ -441,9 +447,9 @@
         }
 
         input[type="file"]::file-selector-button:hover {
-            background-color: var(--primary);
-            border-color: var(--primary);
-            color: white;
+            background-color: var(--button-hover-bg);
+            border-color: var(--line);
+            color: var(--button-text);
         }
 
         /* Custom Dropdown */
@@ -567,12 +573,12 @@
         button {
             border: none;
             border-radius: 10px;
-            background: var(--primary);
-            color: #fff;
+            background: var(--button-bg);
+            color: var(--button-text);
             padding: 10px 14px;
             cursor: pointer;
         }
-        button:hover { background: var(--primary-hover); }
+        button:hover { background: var(--button-hover-bg); }
         .ghost-btn {
             background: transparent;
             border: 1px solid var(--line);
@@ -598,9 +604,9 @@
             background: #d93025;
         }
         .composer-submit-btn {
-            background: var(--primary);
-            color: #ffffff;
-            border: none;
+            background: var(--button-bg);
+            color: var(--button-text);
+            border: 1px solid var(--line);
         }
         @media (max-width: 960px) {
             .app-shell { grid-template-columns: 1fr; }

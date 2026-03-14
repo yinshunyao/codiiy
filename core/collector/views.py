@@ -3,12 +3,16 @@ import io
 import json
 import platform
 import re
+import time
 import zipfile
 import threading
 from datetime import datetime
 from pathlib import Path
 from pathlib import PurePosixPath
+from types import SimpleNamespace
 from urllib.parse import urlencode
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from django.conf import settings
 from django.contrib import messages
@@ -21,22 +25,48 @@ from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils import timezone
 
+from agents.manager import (
+    AGENT_MODULE_LABELS,
+    get_agent_module_dir,
+    list_agent_items as list_agent_items_via_manager,
+    resolve_agent_item_dir as resolve_agent_item_dir_via_manager,
+)
 from tools.component_call_tool import ComponentCallTool
-from agents.helm.requirement_session_command import RequirementSessionCommand
+from tools.knowledge_curation_tool import KnowledgeCurationTool
+from tools.manager import list_toolsets
 
-from .forms import ChatMessageForm, ProjectForm
+from .forms import (
+    ChatMessageForm,
+    CompanionProfileForm,
+    LLMApiConfigForm,
+    LocalLLMConfigForm,
+    ProjectForm,
+)
 from django.http import HttpResponse, JsonResponse
 from .models import (
+    ChatReplyTask,
+    CompanionProfile,
     ComponentSystemPermissionGrant,
     ComponentSystemParamConfig,
     ControlApiTestTask,
+    LLMApiConfig,
     LLMModel,
     LLMProvider,
+    LocalLLMConfig,
+    LocalLLMRuntimeState,
+    LocalLLMRuntimeTask,
     Project,
     RequirementMessage,
     RequirementSession,
 )
 from .services import analyzer
+from .local_llm_server import ensure_local_ollama_server
+from .orchestration import run_companion_orchestration
+from .orchestration.capability_search import (
+    search_agent_entries,
+    search_component_functions,
+    search_toolset_entries,
+)
 
 # 内置阿里模型清单（可直接用于下拉选择）
 ALI_BUILTIN_MODELS = [
@@ -57,16 +87,117 @@ ALI_BUILTIN_MODELS = [
     ("qwen-math-turbo", "Qwen Math Turbo"),
 ]
 
+LLM_API_PRESETS = [
+    {
+        "key": "ali_dashscope",
+        "label": "阿里云百炼（DashScope）",
+        "name": "阿里-百炼",
+        "provider_name": "阿里",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "default_model_id": "qwen-plus",
+    },
+    {
+        "key": "volcengine_ark",
+        "label": "火山引擎方舟（Ark）",
+        "name": "火山-方舟",
+        "provider_name": "火山",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "default_model_id": "doubao-1-5-pro-32k-250115",
+    },
+    {
+        "key": "tencent_hunyuan",
+        "label": "腾讯混元（Hunyuan）",
+        "name": "腾讯-混元",
+        "provider_name": "腾讯",
+        "base_url": "https://api.hunyuan.cloud.tencent.com/v1",
+        "default_model_id": "hunyuan-turbo-latest",
+    },
+    {
+        "key": "huawei_maas",
+        "label": "华为云盘古（ModelArts MaaS）",
+        "name": "华为-盘古",
+        "provider_name": "华为",
+        "base_url": "https://infer-modelarts-cn-southwest-2.modelarts-infer.com/v1",
+        "default_model_id": "pangu-pro",
+    },
+]
+
+LOCAL_LLM_PRESETS = [
+    {
+        "key": "qwen25_7b",
+        "label": "Qwen2.5 7B（通用）",
+        "runtime_backend": "ollama",
+        "name": "本地-Qwen2.5-7B",
+        "endpoint": "http://127.0.0.1:11434",
+        "model_name": "qwen2.5:7b",
+        "keep_alive": "10m",
+        "model_file_path": "",
+        "llama_cpp_n_ctx": 4096,
+    },
+    {
+        "key": "qwen25_14b",
+        "label": "Qwen2.5 14B（高质量）",
+        "runtime_backend": "ollama",
+        "name": "本地-Qwen2.5-14B",
+        "endpoint": "http://127.0.0.1:11434",
+        "model_name": "qwen2.5:14b",
+        "keep_alive": "10m",
+        "model_file_path": "",
+        "llama_cpp_n_ctx": 4096,
+    },
+    {
+        "key": "deepseek_r1_7b",
+        "label": "DeepSeek R1 7B（推理）",
+        "runtime_backend": "ollama",
+        "name": "本地-DeepSeek-R1-7B",
+        "endpoint": "http://127.0.0.1:11434",
+        "model_name": "deepseek-r1:7b",
+        "keep_alive": "15m",
+        "model_file_path": "",
+        "llama_cpp_n_ctx": 4096,
+    },
+    {
+        "key": "llama31_8b",
+        "label": "Llama3.1 8B（通用）",
+        "runtime_backend": "ollama",
+        "name": "本地-Llama3.1-8B",
+        "endpoint": "http://127.0.0.1:11434",
+        "model_name": "llama3.1:8b",
+        "keep_alive": "10m",
+        "model_file_path": "",
+        "llama_cpp_n_ctx": 4096,
+    },
+    {
+        "key": "gemma2_9b",
+        "label": "Gemma2 9B（轻量）",
+        "runtime_backend": "ollama",
+        "name": "本地-Gemma2-9B",
+        "endpoint": "http://127.0.0.1:11434",
+        "model_name": "gemma2:9b",
+        "keep_alive": "5m",
+        "model_file_path": "",
+        "llama_cpp_n_ctx": 4096,
+    },
+    {
+        "key": "llama_cpp_qwen25_7b",
+        "label": "Qwen2.5 7B（llama-cpp-python）",
+        "runtime_backend": "llama_cpp",
+        "name": "Python组件-Qwen2.5-7B",
+        "endpoint": "",
+        "model_name": "qwen2.5-7b-instruct",
+        "keep_alive": "5m",
+        "model_file_path": "/path/to/qwen2.5-7b-instruct.gguf",
+        "llama_cpp_n_ctx": 4096,
+    },
+]
+
 ALLOWED_CONTROL_MODULES = {
     "communicate": "沟通",
     "observe": "观察",
     "decide": "决策",
     "handle": "操作",
 }
-ALLOWED_AGENT_MODULES = {
-    "mindforge": "心法",
-    "helm": "号令",
-}
+ALLOWED_AGENT_MODULES = dict(AGENT_MODULE_LABELS)
 
 THEME_DARK = "dark"
 THEME_LIGHT = "light"
@@ -76,6 +207,22 @@ THEME_LABELS = {
 }
 DEFAULT_UI_THEME = THEME_DARK
 DEFAULT_COMPONENT_CONFIG_NAME = "default"
+SEARCH_ENGINE_AUTO = "auto"
+SEARCH_ENGINE_NATIVE = "native"
+SEARCH_ENGINE_ZVEC = "zvec"
+SEARCH_MODE_TRADITIONAL = "traditional"
+SEARCH_MODE_VECTOR = "vector"
+SEARCH_MODE_HYBRID = "hybrid"
+SEARCH_ENGINE_OPTIONS = [
+    {"value": SEARCH_ENGINE_AUTO, "label": "自动（推荐）"},
+    {"value": SEARCH_ENGINE_NATIVE, "label": "传统检索"},
+    {"value": SEARCH_ENGINE_ZVEC, "label": "zvec 向量"},
+]
+SEARCH_MODE_OPTIONS = [
+    {"value": SEARCH_MODE_HYBRID, "label": "混合检索"},
+    {"value": SEARCH_MODE_TRADITIONAL, "label": "关键词检索"},
+    {"value": SEARCH_MODE_VECTOR, "label": "向量检索"},
+]
 OS_FILTER_ALL = "all"
 SUPPORTED_SYSTEM_KEYS = ("macos", "linux", "windows")
 OS_LABELS = {
@@ -84,6 +231,18 @@ OS_LABELS = {
     "linux": "Linux",
     "windows": "Windows",
 }
+MAIN_CHAT_SESSION_TITLE = "我的聊天记录"
+MAIN_CHAT_SESSION_MARKER = "__CHAT_MAIN__"
+COMPANION_CHAT_SESSION_MARKER_PREFIX = "__CHAT_COMPANION__:"
+COMPANION_CHAT_SESSION_TITLE_PREFIX = "伙伴聊天："
+SUMMARY_SESSION_TITLE_PREFIX = "总结："
+LOCAL_LLM_PROCESS_BOOT_AT = timezone.now()
+LOCAL_LLM_RUNNING_TASK_IDS = set()
+LOCAL_LLM_RUNNING_TASK_IDS_LOCK = threading.Lock()
+LLAMA_CPP_RUNTIME_LOCK = threading.Lock()
+LLAMA_CPP_RUNTIME_MODELS = {}
+CHAT_ORCHESTRATION_META = {}
+CHAT_ORCHESTRATION_META_LOCK = threading.Lock()
 
 try:
     from tools.rule_reader import RuleReader
@@ -91,7 +250,6 @@ except ImportError:
     RuleReader = None
 
 component_call_tool = ComponentCallTool(auto_install=False)
-requirement_session_command = RequirementSessionCommand()
 
 
 def _get_current_runtime_os():
@@ -167,6 +325,20 @@ def _build_os_options():
     return options
 
 
+def _normalize_search_engine(raw_value: str) -> str:
+    value = str(raw_value or "").strip().lower()
+    if value in {SEARCH_ENGINE_AUTO, SEARCH_ENGINE_NATIVE, SEARCH_ENGINE_ZVEC}:
+        return value
+    return SEARCH_ENGINE_AUTO
+
+
+def _normalize_search_mode(raw_value: str) -> str:
+    value = str(raw_value or "").strip().lower()
+    if value in {SEARCH_MODE_TRADITIONAL, SEARCH_MODE_VECTOR, SEARCH_MODE_HYBRID}:
+        return value
+    return SEARCH_MODE_HYBRID
+
+
 def home(request):
     return redirect("session_list")
 
@@ -206,6 +378,430 @@ def _serialize_message_for_llm(msg):
     }
 
 
+def _build_runtime_llm_model(model_id: str):
+    normalized = str(model_id or "").strip()
+    if not normalized:
+        return None
+    return SimpleNamespace(model_id=normalized, name=normalized)
+
+
+def _resolve_companion_for_chat_session(session_obj):
+    companion_id = _get_companion_id_from_chat_session(session_obj)
+    if not companion_id:
+        return None
+    queryset = CompanionProfile.objects.filter(id=companion_id)
+    if getattr(session_obj, "created_by_id", None):
+        queryset = queryset.filter(created_by_id=session_obj.created_by_id)
+    if getattr(session_obj, "project_id", None):
+        queryset = queryset.filter(project_id=session_obj.project_id)
+    return queryset.first()
+
+
+def _build_companion_agent_capability_lines(companion):
+    result_lines = []
+    for module_key in companion.get_allowed_agent_modules():
+        if module_key not in ALLOWED_AGENT_MODULES:
+            continue
+        module_label = ALLOWED_AGENT_MODULES.get(module_key, module_key)
+        module_items = _list_agent_items(module_key, "")
+        item_names = [str(item.get("name") or "").strip() for item in module_items if str(item.get("name") or "").strip()]
+        if item_names:
+            result_lines.append(f"- {module_label}（{module_key}）：{', '.join(item_names)}")
+        else:
+            result_lines.append(f"- {module_label}（{module_key}）：当前无可用项")
+    return result_lines
+
+
+def _build_system_rule_summary_lines(limit: int = 8):
+    items = _list_system_rule_items("")
+    lines = []
+    for item in items[: max(0, int(limit))]:
+        path = str(item.get("path") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        if not path:
+            continue
+        if summary:
+            lines.append(f"- {path}: {summary}")
+        else:
+            lines.append(f"- {path}")
+    return lines
+
+
+def _build_system_skill_summary_lines(limit: int = 8):
+    items = _list_system_skill_items("")
+    lines = []
+    for item in items[: max(0, int(limit))]:
+        name = str(item.get("name") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        if not name:
+            continue
+        if summary:
+            lines.append(f"- {name}: {summary}")
+        else:
+            lines.append(f"- {name}")
+    return lines
+
+
+def _build_companion_chat_system_prompt(companion, current_project):
+    display_name = companion.display_name or companion.name
+    role_title = str(companion.role_title or "").strip() or "伙伴"
+    persona = str(companion.persona or "").strip() or "未配置"
+    tone = str(companion.tone or "").strip() or "未配置"
+    memory_notes = str(companion.memory_notes or "").strip() or "未配置"
+    knowledge_path = str(companion.knowledge_path or "").strip() or "未配置"
+    agent_modules = companion.get_allowed_agent_modules()
+    control_modules = companion.get_allowed_control_modules()
+    toolsets = companion.get_allowed_toolsets()
+    control_components = companion.get_allowed_control_components()
+    control_functions = companion.get_allowed_control_functions()
+    agent_module_text = _build_companion_module_label_text(agent_modules, ALLOWED_AGENT_MODULES)
+    control_module_text = _build_companion_module_label_text(control_modules, ALLOWED_CONTROL_MODULES)
+    toolset_text = "、".join(toolsets) if toolsets else "未配置"
+    component_text = "、".join(control_components[:10]) if control_components else "未配置"
+    function_text = "、".join(control_functions[:8]) if control_functions else "未配置"
+    function_suffix = ""
+    if len(control_functions) > 8:
+        function_suffix = f"（其余 {len(control_functions) - 8} 项省略）"
+    agent_capability_lines = _build_companion_agent_capability_lines(companion)
+    skill_summary_lines = _build_system_skill_summary_lines(limit=10)
+    rule_summary_lines = _build_system_rule_summary_lines(limit=10)
+    project_rules = str(_get_project_rules(current_project) or "").strip()
+    if len(project_rules) > 6000:
+        project_rules = f"{project_rules[:6000]}\n\n（规则内容过长，已截断）"
+
+    sections = [
+        (
+            "你是当前会话绑定的伙伴，请严格按以下配置工作：\n"
+            f"- 伙伴名称：{display_name}\n"
+            f"- 角色：{role_title}\n"
+            f"- 角色描述：{persona}\n"
+            f"- 回复语气：{tone}\n"
+            f"- 长期记忆：{memory_notes}\n"
+            f"- 知识库目录：{knowledge_path}"
+        ),
+        (
+            "可用能力白名单：\n"
+            f"- 工具集：{toolset_text}\n"
+            f"- 心法/号令模块：{agent_module_text}\n"
+            f"- 工具/组件模块：{control_module_text}\n"
+            f"- 组件白名单：{component_text}\n"
+            f"- 组件 API 白名单：{function_text}{function_suffix}\n"
+            "- 你只能在以上白名单内声明和调用能力，不得越权。"
+        ),
+    ]
+    if agent_capability_lines:
+        sections.append("已配置智能体可用项：\n" + "\n".join(agent_capability_lines))
+    if skill_summary_lines:
+        sections.append("系统技能摘要（可参考）：\n" + "\n".join(skill_summary_lines))
+    if rule_summary_lines:
+        sections.append("系统规则摘要（可参考）：\n" + "\n".join(rule_summary_lines))
+    if project_rules:
+        sections.append("项目规则（必须遵循）：\n" + project_rules)
+    sections.append(
+        "执行要求：\n"
+        "- 回答时优先使用已配置的心法、号令、技能。\n"
+        "- 涉及动作执行时，仅可调用白名单中的工具和组件。\n"
+        "- 输出需显式遵循规则约束，保持可执行和可追溯。"
+    )
+    return "\n\n".join(sections)
+
+
+def _build_companion_orchestration_context(session_obj, companion, current_project, selected_llm_model):
+    model_id = str(getattr(selected_llm_model, "model_id", "") or "").strip()
+    if not model_id:
+        model_id = str(getattr(settings, "QWEN_MODEL", "") or "").strip() or "qwen-plus"
+    latest_user_message = (
+        session_obj.messages.filter(role=RequirementMessage.ROLE_USER).order_by("-created_at", "-id").first()
+    )
+    system_prompt = _build_companion_chat_system_prompt(companion, current_project=current_project)
+    capability_search_mode = str(getattr(settings, "COMPANION_CAPABILITY_SEARCH_MODE", "hybrid") or "hybrid").strip()
+    return {
+        "user_query": str((latest_user_message.content if latest_user_message else "") or "").strip(),
+        "model_id": model_id,
+        "phase": str(getattr(session_obj, "phase", "collecting") or "collecting"),
+        "system_prompt": system_prompt,
+        "capability_search_mode": capability_search_mode,
+        "allowed_toolsets": companion.get_allowed_toolsets(),
+        "allowed_agent_modules": companion.get_allowed_agent_modules(),
+        "allowed_control_modules": companion.get_allowed_control_modules(),
+        "allowed_control_components": companion.get_allowed_control_components(),
+        "allowed_control_functions": companion.get_allowed_control_functions(),
+        "companion": {
+            "id": companion.id,
+            "name": companion.name,
+            "display_name": companion.display_name or companion.name,
+            "role_title": companion.role_title,
+            "knowledge_path": companion.knowledge_path,
+        },
+    }
+
+
+def _build_chat_conversation_history(session_obj, current_project):
+    context_limit = _get_chat_context_message_limit()
+    recent_messages = list(session_obj.messages.all().order_by("-created_at")[:context_limit])
+    recent_messages.reverse()
+    conversation_history = [_serialize_message_for_llm(item) for item in recent_messages]
+    companion = _resolve_companion_for_chat_session(session_obj)
+    if companion:
+        system_prompt = _build_companion_chat_system_prompt(companion, current_project=current_project)
+        conversation_history = [{"role": "system", "content": system_prompt}] + conversation_history
+    return conversation_history
+
+
+def _resolve_chat_llm_for_session(session_obj, current_project):
+    companion = _resolve_companion_for_chat_session(session_obj)
+    if companion:
+        companion_model_id = str(companion.default_model_name or "").strip()
+        if companion_model_id:
+            return _build_runtime_llm_model(companion_model_id)
+    selected_project = session_obj.project or current_project
+    if selected_project and selected_project.llm_model:
+        return selected_project.llm_model
+    fallback_model_id = str(getattr(settings, "QWEN_MODEL", "") or "").strip()
+    return _build_runtime_llm_model(fallback_model_id)
+
+
+def _get_chat_context_message_limit():
+    try:
+        limit = int(getattr(settings, "CHAT_CONTEXT_MESSAGE_LIMIT", 50) or 50)
+    except (TypeError, ValueError):
+        limit = 50
+    return max(1, limit)
+
+
+def _get_chat_reply_emit_chunk_size():
+    try:
+        size = int(getattr(settings, "CHAT_REPLY_EMIT_CHUNK_SIZE", 120) or 120)
+    except (TypeError, ValueError):
+        size = 120
+    return max(10, size)
+
+
+def _get_chat_reply_emit_interval_seconds():
+    try:
+        seconds = float(getattr(settings, "CHAT_REPLY_EMIT_INTERVAL_SECONDS", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        seconds = 1.0
+    return max(0.2, seconds)
+
+
+def _run_chat_reply_task(task_id):
+    """
+    异步生成并分段写入助手回复，供前端轮询增量展示。
+    """
+    close_old_connections()
+    try:
+        task = ChatReplyTask.objects.select_related("session", "assistant_message", "session__project").get(id=task_id)
+    except ChatReplyTask.DoesNotExist:
+        return
+
+    try:
+        task.status = ChatReplyTask.STATUS_RUNNING
+        task.started_at = timezone.now()
+        task.error_message = ""
+        process_trace = _new_process_trace()
+        _append_process_trace_event_and_persist(
+            task,
+            process_trace,
+            kind="thinking",
+            title="开始处理请求",
+            status="running",
+            input_data={"task_id": task.id},
+            extra_update_fields=["status", "started_at", "error_message"],
+        )
+
+        session_obj = task.session
+        selected_project = session_obj.project
+        conversation_history = _build_chat_conversation_history(
+            session_obj,
+            current_project=selected_project,
+        )
+        selected_llm_model = _resolve_chat_llm_for_session(
+            session_obj,
+            current_project=selected_project,
+        )
+        companion = _resolve_companion_for_chat_session(session_obj)
+        if companion:
+            _append_process_trace_event_and_persist(
+                task,
+                process_trace,
+                kind="llm_call",
+                title="开始大模型规划",
+                status="running",
+                input_data={"companion_id": companion.id, "companion_name": companion.display_name or companion.name},
+            )
+            orchestration_context = _build_companion_orchestration_context(
+                session_obj=session_obj,
+                companion=companion,
+                current_project=selected_project,
+                selected_llm_model=selected_llm_model,
+            )
+            orchestration_result = run_companion_orchestration(orchestration_context)
+            orchestration_token_usage = _normalize_token_usage(orchestration_result.get("token_usage"))
+            planner_token_usage = _normalize_token_usage(orchestration_result.get("planner_token_usage"))
+            _set_process_trace_token_usage(process_trace, orchestration_token_usage)
+            _append_process_trace_event_and_persist(
+                task,
+                process_trace,
+                kind="llm_call",
+                title="大模型规划完成",
+                status="success",
+                output_data={"token_usage": planner_token_usage},
+                token_usage=planner_token_usage,
+            )
+            _append_process_trace_event_and_persist(
+                task,
+                process_trace,
+                kind="llm_call",
+                title="协同执行完成",
+                status="success" if bool(orchestration_result.get("success")) else "failed",
+                input_data={"model_id": str(getattr(selected_llm_model, "model_id", "") or "")},
+                output_data={
+                    "active_agent": orchestration_result.get("active_agent") or "",
+                    "fallback_used": bool(orchestration_result.get("fallback_used")),
+                    "token_usage": orchestration_token_usage,
+                },
+                error=str(orchestration_result.get("error") or ""),
+                token_usage=orchestration_token_usage,
+            )
+            for step in orchestration_result.get("step_results") or []:
+                step_output = step.get("output") if isinstance(step, dict) else {}
+                step_token_usage = _normalize_token_usage(
+                    step_output.get("token_usage") if isinstance(step_output, dict) else {}
+                )
+                step_executor = str(step.get("executor") or "").strip()
+                step_kind = "thinking"
+                if step_executor.startswith("toolRunner"):
+                    step_kind = "code_call"
+                elif step_executor.startswith("mindforgeRunner") or step_executor == "answerSynthesizer":
+                    step_kind = "llm_call"
+                _append_process_trace_event_and_persist(
+                    task,
+                    process_trace,
+                    kind=step_kind,
+                    title=f"步骤 {step.get('step_id') or ''}",
+                    status=str(step.get("status") or "success"),
+                    input_data={"executor": step_executor, "step_type": step.get("step_type")},
+                    output_data=step_output,
+                    error=str(step.get("error") or ""),
+                    token_usage=step_token_usage,
+                )
+            _set_chat_orchestration_meta(
+                task.id,
+                {
+                    "plan": orchestration_result.get("plan") or {},
+                    "plan_steps": orchestration_result.get("step_results") or [],
+                    "active_agent": orchestration_result.get("active_agent") or "",
+                    "tool_events": orchestration_result.get("tool_events") or [],
+                    "fallback_used": bool(orchestration_result.get("fallback_used")),
+                    "token_usage": orchestration_token_usage,
+                },
+            )
+            full_text = str(orchestration_result.get("final_answer") or "").strip()
+            if not full_text:
+                full_text = str(orchestration_result.get("error") or "伙伴协同执行失败，请稍后重试。")
+            full_text = _sanitize_user_facing_response_text(full_text)
+        else:
+            _append_process_trace_event_and_persist(
+                task,
+                process_trace,
+                kind="llm_call",
+                title="调用大模型生成回复",
+                status="running",
+                input_data={"model_id": str(getattr(selected_llm_model, "model_id", "") or "")},
+            )
+            chat_result = analyzer.chat(
+                conversation_history=conversation_history,
+                llm_model=selected_llm_model,
+            )
+            chat_token_usage = _normalize_token_usage(chat_result.get("token_usage"))
+            _set_process_trace_token_usage(process_trace, chat_token_usage)
+            _append_process_trace_event_and_persist(
+                task,
+                process_trace,
+                kind="llm_call",
+                title="大模型返回结果",
+                status="success" if bool(chat_result.get("success")) else "failed",
+                output_data={
+                    "has_response": bool(str(chat_result.get("response") or "").strip()),
+                    "token_usage": chat_token_usage,
+                },
+                error=str(chat_result.get("error") or ""),
+                token_usage=chat_token_usage,
+            )
+            full_text = str(chat_result.get("response") or "").strip()
+            if not full_text:
+                full_text = str(chat_result.get("error") or "助手暂时无法回复，请稍后重试。")
+            full_text = _sanitize_user_facing_response_text(full_text)
+
+        assistant_message = task.assistant_message
+        if not assistant_message:
+            task.status = ChatReplyTask.STATUS_FAILED
+            task.error_message = "未找到助手占位消息。"
+            task.finished_at = timezone.now()
+            task.save(update_fields=["status", "error_message", "finished_at", "updated_at"])
+            return
+
+        chunk_size = _get_chat_reply_emit_chunk_size()
+        emit_interval = _get_chat_reply_emit_interval_seconds()
+        cursor = 0
+        while cursor < len(full_text):
+            task.refresh_from_db(fields=["stop_requested", "status"])
+            if task.stop_requested:
+                task.status = ChatReplyTask.STATUS_STOPPED
+                task.finished_at = timezone.now()
+                _append_process_trace_event_and_persist(
+                    task,
+                    process_trace,
+                    kind="result",
+                    title="用户停止生成",
+                    status="stopped",
+                    extra_update_fields=["status", "finished_at"],
+                )
+                return
+
+            cursor = min(len(full_text), cursor + chunk_size)
+            assistant_message.content = full_text[:cursor]
+            assistant_message.save(update_fields=["content"])
+            if cursor < len(full_text):
+                time.sleep(emit_interval)
+
+        task.status = ChatReplyTask.STATUS_COMPLETED
+        task.finished_at = timezone.now()
+        _append_process_trace_event_and_persist(
+            task,
+            process_trace,
+            kind="result",
+            title="写回最终回复",
+            status="success",
+            output_data={
+                "content_length": len(full_text),
+                "token_usage": _normalize_token_usage(process_trace.get("token_usage")),
+            },
+            token_usage=_normalize_token_usage(process_trace.get("token_usage")),
+            extra_update_fields=["status", "finished_at"],
+        )
+    except Exception as exc:
+        task.error_message = str(exc)
+        task.status = ChatReplyTask.STATUS_FAILED
+        task.finished_at = timezone.now()
+        trace_payload = _normalize_process_trace(getattr(task, "execution_trace", {}))
+        _append_process_trace_event_and_persist(
+            task,
+            trace_payload,
+            kind="result",
+            title="处理失败",
+            status="failed",
+            error=str(exc),
+            extra_update_fields=["error_message", "status", "finished_at"],
+        )
+        if task.assistant_message and not str(task.assistant_message.content or "").strip():
+            task.assistant_message.content = "助手暂时无法回复，请稍后重试。"
+            task.assistant_message.save(update_fields=["content"])
+    finally:
+        close_old_connections()
+
+
 def _get_current_project(request):
     """获取当前选中的项目"""
     project_id = request.session.get('current_project_id')
@@ -215,6 +811,91 @@ def _get_current_project(request):
             return project
     # 返回默认项目
     return Project.get_default_project(request.user)
+
+
+def _is_main_chat_session(session_obj):
+    if not session_obj:
+        return False
+    return str(session_obj.content or "").strip() == MAIN_CHAT_SESSION_MARKER
+
+
+def _build_companion_chat_session_marker(companion_id):
+    return f"{COMPANION_CHAT_SESSION_MARKER_PREFIX}{int(companion_id)}"
+
+
+def _get_companion_id_from_chat_session(session_obj):
+    if not session_obj:
+        return None
+    marker = str(session_obj.content or "").strip()
+    if not marker.startswith(COMPANION_CHAT_SESSION_MARKER_PREFIX):
+        return None
+    raw_id = marker[len(COMPANION_CHAT_SESSION_MARKER_PREFIX):].strip()
+    if not raw_id.isdigit():
+        return None
+    return int(raw_id)
+
+
+def _is_companion_chat_session(session_obj):
+    return _get_companion_id_from_chat_session(session_obj) is not None
+
+
+def _get_or_create_main_chat_session(request, current_project=None):
+    main_session = (
+        RequirementSession.objects.filter(
+            created_by=request.user,
+            content=MAIN_CHAT_SESSION_MARKER,
+        )
+        .order_by("-updated_at")
+        .first()
+    )
+    if main_session:
+        if current_project and main_session.project_id != current_project.id:
+            main_session.project = current_project
+            main_session.save(update_fields=["project", "updated_at"])
+        return main_session
+
+    if current_project is None:
+        current_project = _get_current_project(request)
+    return RequirementSession.objects.create(
+        title=MAIN_CHAT_SESSION_TITLE,
+        content=MAIN_CHAT_SESSION_MARKER,
+        created_by=request.user,
+        project=current_project,
+    )
+
+
+def _get_or_create_companion_chat_session(request, companion, current_project=None):
+    if current_project is None:
+        current_project = _get_current_project(request)
+    marker = _build_companion_chat_session_marker(companion.id)
+    session_title = f"{COMPANION_CHAT_SESSION_TITLE_PREFIX}{companion.display_name or companion.name}"
+    chat_session = (
+        RequirementSession.objects.filter(
+            created_by=request.user,
+            content=marker,
+        )
+        .order_by("-updated_at")
+        .first()
+    )
+    if chat_session:
+        update_fields = []
+        if current_project and chat_session.project_id != current_project.id:
+            chat_session.project = current_project
+            update_fields.append("project")
+        if str(chat_session.title or "").strip() != session_title:
+            chat_session.title = session_title
+            update_fields.append("title")
+        if update_fields:
+            update_fields.append("updated_at")
+            chat_session.save(update_fields=update_fields)
+        return chat_session
+
+    return RequirementSession.objects.create(
+        title=session_title,
+        content=marker,
+        created_by=request.user,
+        project=current_project,
+    )
 
 
 def _resolve_requirement_directory(current_project):
@@ -356,33 +1037,287 @@ def _clear_rollback_draft(request, session_id):
         request.session.modified = True
 
 
-def _build_chat_context(request, active_session=None, message_form=None):
+def _set_chat_orchestration_meta(task_id, data):
+    with CHAT_ORCHESTRATION_META_LOCK:
+        CHAT_ORCHESTRATION_META[int(task_id)] = dict(data or {})
+
+
+def _get_chat_orchestration_meta(task_id):
+    with CHAT_ORCHESTRATION_META_LOCK:
+        return dict(CHAT_ORCHESTRATION_META.get(int(task_id), {}))
+
+
+def _new_process_trace():
+    return {"events": [], "token_usage": {}}
+
+
+def _normalize_token_usage(raw_usage):
+    if not isinstance(raw_usage, dict):
+        return {}
+
+    def _to_int(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if text.isdigit():
+                return int(text)
+        return None
+
+    prompt_tokens = _to_int(raw_usage.get("prompt_tokens"))
+    completion_tokens = _to_int(raw_usage.get("completion_tokens"))
+    total_tokens = _to_int(raw_usage.get("total_tokens"))
+    if total_tokens is None and (prompt_tokens is not None or completion_tokens is not None):
+        total_tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
+    if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+        return {}
+    return {
+        "prompt_tokens": int(prompt_tokens or 0),
+        "completion_tokens": int(completion_tokens or 0),
+        "total_tokens": int(total_tokens or 0),
+    }
+
+
+def _merge_token_usage(base_usage, add_usage):
+    normalized_base = _normalize_token_usage(base_usage)
+    normalized_add = _normalize_token_usage(add_usage)
+    if not normalized_add:
+        return normalized_base
+    return {
+        "prompt_tokens": int(normalized_base.get("prompt_tokens", 0)) + int(normalized_add.get("prompt_tokens", 0)),
+        "completion_tokens": int(normalized_base.get("completion_tokens", 0))
+        + int(normalized_add.get("completion_tokens", 0)),
+        "total_tokens": int(normalized_base.get("total_tokens", 0)) + int(normalized_add.get("total_tokens", 0)),
+    }
+
+
+def _set_process_trace_token_usage(process_trace, usage, merge=False):
+    if not isinstance(process_trace, dict):
+        return
+    if merge:
+        process_trace["token_usage"] = _merge_token_usage(process_trace.get("token_usage"), usage)
+    else:
+        process_trace["token_usage"] = _normalize_token_usage(usage)
+
+
+def _sanitize_user_facing_response_text(raw_text):
+    text = str(raw_text or "").strip()
+    if not text:
+        return ""
+    # 兼容 SDK 对象字符串直出场景：{'success': True, 'data': GenerationOutput(text='...')}
+    generation_output_match = re.search(
+        r"GenerationOutput\(text='(?P<body>.*?)(?:',\s*choices=|',\s*finish_reason=)",
+        text,
+        re.DOTALL,
+    )
+    if generation_output_match:
+        candidate = generation_output_match.group("body")
+        candidate = candidate.replace("\\n", "\n").replace("\\'", "'").strip()
+        if candidate:
+            return candidate
+    # 兼容嵌套 success/data 包裹文本对象的字符串直出，避免展示原始结构。
+    if text.startswith("{'success':") and "'data':" in text and "'text':" in text:
+        text_match = re.search(r"'text':\s*'(?P<body>.*?)'", text, re.DOTALL)
+        if text_match:
+            candidate = text_match.group("body").replace("\\n", "\n").replace("\\'", "'").strip()
+            if candidate:
+                return candidate
+    return text
+
+
+def _append_process_trace_event(
+    process_trace,
+    kind,
+    title,
+    status="success",
+    input_data=None,
+    output_data=None,
+    error="",
+    token_usage=None,
+):
+    if not isinstance(process_trace, dict):
+        return
+    events = process_trace.setdefault("events", [])
+    if not isinstance(events, list):
+        events = []
+        process_trace["events"] = events
+    events.append(
+        {
+            "kind": str(kind or "").strip() or "process",
+            "title": str(title or "").strip() or "步骤",
+            "status": str(status or "").strip() or "success",
+            "input": input_data,
+            "output": output_data,
+            "error": str(error or "").strip(),
+            "ts": timezone.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "token_usage": _normalize_token_usage(token_usage),
+        }
+    )
+
+
+def _persist_process_trace(task, process_trace, extra_update_fields=None):
+    if not task:
+        return
+    task.execution_trace = _normalize_process_trace(process_trace)
+    update_fields = ["execution_trace", "updated_at"]
+    if isinstance(extra_update_fields, (list, tuple)):
+        for field in extra_update_fields:
+            field_name = str(field or "").strip()
+            if field_name and field_name not in update_fields:
+                update_fields.append(field_name)
+    task.save(update_fields=update_fields)
+
+
+def _append_process_trace_event_and_persist(
+    task,
+    process_trace,
+    kind,
+    title,
+    status="success",
+    input_data=None,
+    output_data=None,
+    error="",
+    token_usage=None,
+    extra_update_fields=None,
+):
+    _append_process_trace_event(
+        process_trace=process_trace,
+        kind=kind,
+        title=title,
+        status=status,
+        input_data=input_data,
+        output_data=output_data,
+        error=error,
+        token_usage=token_usage,
+    )
+    _persist_process_trace(task, process_trace, extra_update_fields=extra_update_fields)
+
+
+def _normalize_process_trace(raw_trace):
+    if not isinstance(raw_trace, dict):
+        return {"events": [], "token_usage": {}}
+    events = raw_trace.get("events")
+    if not isinstance(events, list):
+        return {"events": [], "token_usage": _normalize_token_usage(raw_trace.get("token_usage"))}
+    normalized = []
+    for item in events:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            {
+                "kind": str(item.get("kind") or "process"),
+                "title": str(item.get("title") or "步骤"),
+                "status": str(item.get("status") or "success"),
+                "input": item.get("input"),
+                "output": item.get("output"),
+                "error": str(item.get("error") or ""),
+                "ts": str(item.get("ts") or ""),
+                "token_usage": _normalize_token_usage(item.get("token_usage")),
+            }
+        )
+    return {
+        "events": normalized,
+        "token_usage": _normalize_token_usage(raw_trace.get("token_usage")),
+    }
+
+
+def _build_messages_with_process_trace(session_obj):
+    if not session_obj:
+        return []
+    message_items = list(session_obj.messages.all())
+    trace_by_message_id = {}
+    reply_tasks = (
+        ChatReplyTask.objects.filter(session=session_obj, assistant_message__isnull=False)
+        .select_related("assistant_message")
+        .order_by("-id")
+    )
+    for task in reply_tasks:
+        assistant_message_id = getattr(task, "assistant_message_id", None)
+        if not assistant_message_id or assistant_message_id in trace_by_message_id:
+            continue
+        normalized_trace = _normalize_process_trace(task.execution_trace)
+        if normalized_trace.get("events"):
+            trace_by_message_id[assistant_message_id] = normalized_trace
+    for msg in message_items:
+        trace = trace_by_message_id.get(msg.id, {"events": []})
+        msg.process_trace = trace
+        msg.process_trace_events = trace.get("events", [])
+        msg.token_usage = _normalize_token_usage(trace.get("token_usage"))
+    return message_items
+
+
+def _build_chat_context(request, active_session=None, message_form=None, chat_session=None, companion_chat=None):
     current_project = _get_current_project(request)
-    # 只显示当前项目的会话
-    sessions = RequirementSession.objects.filter(
+    primary_chat_session = chat_session or _get_or_create_main_chat_session(request, current_project=current_project)
+    summary_sessions = RequirementSession.objects.filter(
         created_by=request.user,
-        project=current_project
-    ).order_by("-updated_at")
-    primary_chat_session = active_session or sessions.first()
+    ).exclude(id=primary_chat_session.id).order_by("-updated_at")
+    is_companion_chat = bool(companion_chat)
+    if is_companion_chat:
+        summary_sessions = summary_sessions.exclude(content=MAIN_CHAT_SESSION_MARKER)
+        summary_sessions = summary_sessions.exclude(content__startswith=COMPANION_CHAT_SESSION_MARKER_PREFIX)
+    display_session = active_session if active_session else primary_chat_session
+    is_summary_view = bool(display_session and display_session.id != primary_chat_session.id)
 
     # 获取用户的所有项目
     projects = Project.objects.filter(created_by=request.user).order_by("-is_default", "-updated_at")
 
-    current_llm_name = (
-        current_project.llm_model.name
-        if current_project and current_project.llm_model
-        else getattr(settings, "QWEN_MODEL", "未配置模型")
-    )
+    if is_companion_chat:
+        companion_default_model = str(getattr(companion_chat, "default_model_name", "") or "").strip()
+        if companion_default_model:
+            current_llm_name = companion_default_model
+        elif current_project and current_project.llm_model:
+            current_llm_name = current_project.llm_model.name
+        else:
+            current_llm_name = getattr(settings, "QWEN_MODEL", "未配置模型")
+    else:
+        current_llm_name = (
+            current_project.llm_model.name
+            if current_project and current_project.llm_model
+            else getattr(settings, "QWEN_MODEL", "未配置模型")
+        )
 
-    rollback_draft = _get_rollback_draft(request, active_session.id) if active_session else None
-    if active_session and message_form is None and rollback_draft:
+    rollback_draft = _get_rollback_draft(request, primary_chat_session.id) if primary_chat_session else None
+    if primary_chat_session and message_form is None and rollback_draft and not is_summary_view:
         message_form = ChatMessageForm(initial={"content": rollback_draft.get("content", "")})
 
+    enabled_companion_items = []
+    sidebar_companion_items = []
+    if current_project:
+        all_companions = CompanionProfile.objects.filter(
+            created_by=request.user,
+            project=current_project,
+        ).order_by("-updated_at", "name")
+        enabled_companions = CompanionProfile.objects.filter(
+            created_by=request.user,
+            project=current_project,
+            is_active=True,
+        ).order_by("-updated_at", "name")
+        for item in enabled_companions:
+            enabled_companion_items.append(
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "display_name": item.display_name or item.name,
+                }
+            )
+        sidebar_companion_items = _build_companion_items(
+            all_companions,
+            current_project=current_project,
+            keyword="",
+            user=request.user,
+            order_by_chat_time=True,
+        )
+
     return {
-        "sessions": sessions,
+        "sessions": summary_sessions,
+        "summary_sessions": summary_sessions,
         "primary_chat_session": primary_chat_session,
-        "active_session": active_session,
-        "messages": active_session.messages.all() if active_session else [],
+        "chat_session": primary_chat_session,
+        "active_session": display_session,
+        "messages": _build_messages_with_process_trace(display_session),
         "message_form": message_form or ChatMessageForm(),
         "current_project": current_project,
         "projects": projects,
@@ -395,7 +1330,528 @@ def _build_chat_context(request, active_session=None, message_form=None):
         "current_nav": "chat",
         "ui_theme": _get_ui_theme(request),
         "ui_theme_options": THEME_LABELS,
+        "enabled_companions": enabled_companion_items,
+        "sidebar_companion_items": sidebar_companion_items,
+        "current_companion_nav_id": companion_chat.id if companion_chat else None,
+        "is_summary_view": is_summary_view,
+        "is_companion_chat": is_companion_chat,
+        "companion_chat": companion_chat,
+        "enable_summary_drawer": not is_companion_chat,
+        "enable_summary_actions": not is_companion_chat,
+        "show_llm_selector": not is_companion_chat,
     }
+
+
+def _mask_secret_value(raw_value: str) -> str:
+    value = str(raw_value or "").strip()
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
+
+
+def _build_llm_api_presets_for_template():
+    return [dict(item) for item in LLM_API_PRESETS]
+
+
+def _build_local_llm_presets_for_template():
+    return [dict(item) for item in LOCAL_LLM_PRESETS]
+
+
+class OllamaRuntimeManager:
+    """Ollama 本地模型运行管理（基于官方 HTTP API）。"""
+
+    def __init__(self, endpoint: str, timeout: int = 20):
+        self.endpoint = str(endpoint or "http://127.0.0.1:11434").strip().rstrip("/")
+        self.timeout = timeout
+
+    def _request_json(self, method: str, path: str, payload=None):
+        url = f"{self.endpoint}{path}"
+        data = None
+        headers = {}
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request_obj = urllib_request.Request(url=url, data=data, method=method.upper(), headers=headers)
+        try:
+            with urllib_request.urlopen(request_obj, timeout=self.timeout) as response:
+                body = response.read().decode("utf-8", errors="ignore")
+                return json.loads(body or "{}"), None
+        except urllib_error.HTTPError as ex:
+            detail = ex.read().decode("utf-8", errors="ignore")
+            return None, f"HTTP {ex.code}: {detail or ex.reason}"
+        except urllib_error.URLError as ex:
+            reason = getattr(ex, "reason", ex)
+            return None, f"连接失败：{reason}"
+        except Exception as ex:
+            return None, str(ex)
+
+    def health(self):
+        _, error_message = self._request_json("GET", "/api/tags")
+        return error_message is None, error_message
+
+    def list_models(self):
+        data, error_message = self._request_json("GET", "/api/tags")
+        if error_message:
+            return [], error_message
+        models = data.get("models") if isinstance(data, dict) else []
+        return models if isinstance(models, list) else [], None
+
+    def list_running_models(self):
+        data, error_message = self._request_json("GET", "/api/ps")
+        if error_message:
+            return [], error_message
+        models = data.get("models") if isinstance(data, dict) else []
+        return models if isinstance(models, list) else [], None
+
+    def pull_model(self, model_name: str):
+        _, error_message = self._request_json(
+            "POST",
+            "/api/pull",
+            {"model": model_name, "stream": False},
+        )
+        return error_message is None, error_message
+
+    def warmup_model(self, model_name: str, keep_alive: str):
+        _, error_message = self._request_json(
+            "POST",
+            "/api/generate",
+            {
+                "model": model_name,
+                "prompt": "ping",
+                "stream": False,
+                "keep_alive": keep_alive or "5m",
+            },
+        )
+        return error_message is None, error_message
+
+    def unload_model(self, model_name: str):
+        _, error_message = self._request_json(
+            "POST",
+            "/api/generate",
+            {
+                "model": model_name,
+                "prompt": "",
+                "stream": False,
+                "keep_alive": 0,
+            },
+        )
+        return error_message is None, error_message
+
+
+def _local_llm_status_label(status: str) -> str:
+    mapping = {
+        LocalLLMRuntimeState.STATUS_INACTIVE: "未激活",
+        LocalLLMRuntimeState.STATUS_ACTIVATING: "激活中",
+        LocalLLMRuntimeState.STATUS_ACTIVE: "已激活",
+        LocalLLMRuntimeState.STATUS_DEACTIVATING: "取消激活中",
+        LocalLLMRuntimeState.STATUS_FAILED: "失败",
+    }
+    return mapping.get(str(status or "").strip(), "未知")
+
+
+def _get_or_create_local_llm_runtime_state(config: LocalLLMConfig) -> LocalLLMRuntimeState:
+    state, _ = LocalLLMRuntimeState.objects.get_or_create(
+        config=config,
+        defaults={
+            "status": LocalLLMRuntimeState.STATUS_INACTIVE,
+            "is_busy": False,
+            "last_message": "",
+            "last_error": "",
+        },
+    )
+    return state
+
+
+def _runtime_contains_model(running_models, model_name: str) -> bool:
+    candidate = str(model_name or "").strip().lower()
+    if not candidate:
+        return False
+    for item in running_models or []:
+        model_value = ""
+        if isinstance(item, dict):
+            model_value = str(item.get("model") or item.get("name") or "").strip().lower()
+        else:
+            model_value = str(item or "").strip().lower()
+        if not model_value:
+            continue
+        if model_value == candidate or model_value.startswith(f"{candidate} "):
+            return True
+    return False
+
+
+def _llama_cpp_runtime_health():
+    try:
+        from llama_cpp import Llama  # noqa: F401
+        return True, None
+    except Exception as ex:
+        return False, f"llama-cpp-python 不可用：{ex}"
+
+
+def _llama_cpp_runtime_key(config: LocalLLMConfig) -> str:
+    return str(config.id)
+
+
+def _llama_cpp_is_active(config: LocalLLMConfig) -> bool:
+    key = _llama_cpp_runtime_key(config)
+    with LLAMA_CPP_RUNTIME_LOCK:
+        return key in LLAMA_CPP_RUNTIME_MODELS
+
+
+def _llama_cpp_running_models_snapshot():
+    with LLAMA_CPP_RUNTIME_LOCK:
+        snapshots = []
+        for item in LLAMA_CPP_RUNTIME_MODELS.values():
+            snapshots.append(
+                {
+                    "name": item.get("model_name") or item.get("config_name") or "llama-cpp 模型",
+                    "config_name": item.get("config_name"),
+                    "model_file_path": item.get("model_file_path"),
+                }
+            )
+        return snapshots
+
+
+def _llama_cpp_activate_model(config: LocalLLMConfig):
+    model_file_path = str(config.model_file_path or "").strip()
+    if not model_file_path:
+        return False, "llama-cpp 模式缺少模型文件路径。"
+    if not os.path.exists(model_file_path):
+        return False, f"模型文件不存在：{model_file_path}"
+    key = _llama_cpp_runtime_key(config)
+    with LLAMA_CPP_RUNTIME_LOCK:
+        if key in LLAMA_CPP_RUNTIME_MODELS:
+            return True, None
+    try:
+        from llama_cpp import Llama
+    except Exception as ex:
+        return False, f"llama-cpp-python 不可用：{ex}"
+    try:
+        model_obj = Llama(
+            model_path=model_file_path,
+            n_ctx=int(config.llama_cpp_n_ctx or 4096),
+            verbose=False,
+        )
+    except Exception as ex:
+        return False, f"加载 llama-cpp 模型失败：{ex}"
+    with LLAMA_CPP_RUNTIME_LOCK:
+        LLAMA_CPP_RUNTIME_MODELS[key] = {
+            "config_id": config.id,
+            "config_name": config.name,
+            "model_name": config.model_name,
+            "name": config.model_name,
+            "model_file_path": model_file_path,
+            "llama": model_obj,
+        }
+    return True, None
+
+
+def _llama_cpp_deactivate_model(config: LocalLLMConfig):
+    key = _llama_cpp_runtime_key(config)
+    with LLAMA_CPP_RUNTIME_LOCK:
+        runtime = LLAMA_CPP_RUNTIME_MODELS.pop(key, None)
+    if runtime is None:
+        return True, None
+    llama_obj = runtime.get("llama")
+    try:
+        del llama_obj
+    except Exception:
+        pass
+    return True, None
+
+
+def _refresh_local_llm_state_by_runtime(item: LocalLLMConfig, state: LocalLLMRuntimeState, running_models, runtime_error: str):
+    if state.is_busy:
+        return state
+    changed_fields = []
+    if item.runtime_backend == LocalLLMConfig.BACKEND_LLAMA_CPP:
+        health_ok, health_error = _llama_cpp_runtime_health()
+        if not health_ok:
+            if state.last_error != health_error:
+                state.last_error = health_error
+                changed_fields.append("last_error")
+            if state.status != LocalLLMRuntimeState.STATUS_FAILED:
+                state.status = LocalLLMRuntimeState.STATUS_FAILED
+                changed_fields.append("status")
+            if state.last_message != "llama-cpp 组件不可用":
+                state.last_message = "llama-cpp 组件不可用"
+                changed_fields.append("last_message")
+        else:
+            is_active = _llama_cpp_is_active(item)
+            next_status = LocalLLMRuntimeState.STATUS_ACTIVE if is_active else LocalLLMRuntimeState.STATUS_INACTIVE
+            next_message = "模型已激活" if is_active else "模型未激活"
+            if state.status != next_status:
+                state.status = next_status
+                changed_fields.append("status")
+            if state.last_message != next_message:
+                state.last_message = next_message
+                changed_fields.append("last_message")
+            if state.last_error:
+                state.last_error = ""
+                changed_fields.append("last_error")
+    elif runtime_error:
+        if state.last_error != runtime_error:
+            state.last_error = runtime_error
+            changed_fields.append("last_error")
+        if not state.last_message:
+            state.last_message = "运行状态检查失败"
+            changed_fields.append("last_message")
+    else:
+        is_active = _runtime_contains_model(running_models, item.model_name)
+        next_status = LocalLLMRuntimeState.STATUS_ACTIVE if is_active else LocalLLMRuntimeState.STATUS_INACTIVE
+        next_message = "模型已激活" if is_active else "模型未激活"
+        if state.status != next_status:
+            state.status = next_status
+            changed_fields.append("status")
+        if state.last_message != next_message:
+            state.last_message = next_message
+            changed_fields.append("last_message")
+        if state.last_error:
+            state.last_error = ""
+            changed_fields.append("last_error")
+    if changed_fields:
+        changed_fields.append("updated_at")
+        state.save(update_fields=changed_fields)
+    return state
+
+
+def _build_local_llm_runtime_state_payload(state: LocalLLMRuntimeState):
+    task = state.last_task
+    task_payload = None
+    if task is not None:
+        task_payload = {
+            "id": task.id,
+            "action": task.action,
+            "status": task.status,
+            "stage": task.stage,
+            "detail_message": task.detail_message,
+            "error_message": task.error_message,
+            "updated_at": task.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    return {
+        "status": state.status,
+        "status_label": _local_llm_status_label(state.status),
+        "is_busy": bool(state.is_busy),
+        "current_action": state.current_action,
+        "last_message": state.last_message,
+        "last_error": state.last_error,
+        "task": task_payload,
+    }
+
+
+def _recover_interrupted_local_llm_tasks():
+    stale_qs = LocalLLMRuntimeTask.objects.filter(
+        status__in=[LocalLLMRuntimeTask.STATUS_PENDING, LocalLLMRuntimeTask.STATUS_RUNNING],
+        updated_at__lt=LOCAL_LLM_PROCESS_BOOT_AT,
+    ).select_related("config")
+    now = timezone.now()
+    for task in stale_qs:
+        task.status = LocalLLMRuntimeTask.STATUS_INTERRUPTED
+        task.stage = LocalLLMRuntimeTask.STAGE_COMPLETED
+        task.finished_at = now
+        task.error_message = "服务重启，后台任务已中断。"
+        task.detail_message = "任务中断，请重新发起模型操作。"
+        task.save(
+            update_fields=[
+                "status",
+                "stage",
+                "finished_at",
+                "error_message",
+                "detail_message",
+                "updated_at",
+            ]
+        )
+        state = _get_or_create_local_llm_runtime_state(task.config)
+        state.is_busy = False
+        state.current_action = ""
+        state.last_task = task
+        state.last_error = task.error_message
+        state.last_message = task.detail_message
+        state.status = LocalLLMRuntimeState.STATUS_FAILED
+        state.save(
+            update_fields=[
+                "is_busy",
+                "current_action",
+                "last_task",
+                "last_error",
+                "last_message",
+                "status",
+                "updated_at",
+            ]
+        )
+
+
+def _execute_local_llm_runtime_task(task_id: int):
+    close_old_connections()
+    try:
+        task = LocalLLMRuntimeTask.objects.select_related("config").get(id=task_id)
+    except LocalLLMRuntimeTask.DoesNotExist:
+        close_old_connections()
+        return
+
+    item = task.config
+    state = _get_or_create_local_llm_runtime_state(item)
+    now = timezone.now()
+    task.status = LocalLLMRuntimeTask.STATUS_RUNNING
+    task.started_at = now
+    task.detail_message = "任务执行中"
+    task.save(update_fields=["status", "started_at", "detail_message", "updated_at"])
+    state.is_busy = True
+    state.current_action = task.action
+    state.last_task = task
+    state.last_error = ""
+    if task.action == LocalLLMRuntimeTask.ACTION_ACTIVATE:
+        state.status = LocalLLMRuntimeState.STATUS_ACTIVATING
+        state.last_message = "正在激活模型"
+    else:
+        state.status = LocalLLMRuntimeState.STATUS_DEACTIVATING
+        state.last_message = "正在取消激活模型"
+    state.save(
+        update_fields=[
+            "is_busy",
+            "current_action",
+            "last_task",
+            "last_error",
+            "status",
+            "last_message",
+            "updated_at",
+        ]
+    )
+
+    try:
+        if item.runtime_backend == LocalLLMConfig.BACKEND_LLAMA_CPP:
+            if task.action == LocalLLMRuntimeTask.ACTION_ACTIVATE:
+                task.stage = LocalLLMRuntimeTask.STAGE_WARMING
+                task.detail_message = "正在加载 llama-cpp 模型"
+                task.save(update_fields=["stage", "detail_message", "updated_at"])
+                ok, err = _llama_cpp_activate_model(item)
+                if not ok:
+                    raise RuntimeError(err or "加载 llama-cpp 模型失败")
+                success_message = f"模型已激活：{item.model_name}"
+                success_status = LocalLLMRuntimeState.STATUS_ACTIVE
+            else:
+                task.stage = LocalLLMRuntimeTask.STAGE_UNLOADING
+                task.detail_message = "正在取消激活 llama-cpp 模型"
+                task.save(update_fields=["stage", "detail_message", "updated_at"])
+                ok, err = _llama_cpp_deactivate_model(item)
+                if not ok:
+                    raise RuntimeError(err or "取消激活 llama-cpp 模型失败")
+                success_message = f"模型已取消激活：{item.model_name}"
+                success_status = LocalLLMRuntimeState.STATUS_INACTIVE
+        else:
+            manager = OllamaRuntimeManager(endpoint=item.endpoint, timeout=600)
+            ok, start_error = ensure_local_ollama_server(manager.endpoint)
+            if not ok:
+                raise RuntimeError(start_error or "本地模型服务不可用。")
+            if task.action == LocalLLMRuntimeTask.ACTION_ACTIVATE:
+                task.stage = LocalLLMRuntimeTask.STAGE_PULLING
+                task.detail_message = "正在拉取模型"
+                task.save(update_fields=["stage", "detail_message", "updated_at"])
+                ok, err = manager.pull_model(item.model_name)
+                if not ok:
+                    raise RuntimeError(err or "拉取模型失败")
+
+                task.stage = LocalLLMRuntimeTask.STAGE_WARMING
+                task.detail_message = "正在加载模型"
+                task.save(update_fields=["stage", "detail_message", "updated_at"])
+                ok, err = manager.warmup_model(item.model_name, item.keep_alive)
+                if not ok:
+                    raise RuntimeError(err or "加载模型失败")
+                success_message = f"模型已激活：{item.model_name}"
+                success_status = LocalLLMRuntimeState.STATUS_ACTIVE
+            else:
+                task.stage = LocalLLMRuntimeTask.STAGE_UNLOADING
+                task.detail_message = "正在取消激活模型"
+                task.save(update_fields=["stage", "detail_message", "updated_at"])
+                ok, err = manager.unload_model(item.model_name)
+                if not ok:
+                    raise RuntimeError(err or "取消激活模型失败")
+                success_message = f"模型已取消激活：{item.model_name}"
+                success_status = LocalLLMRuntimeState.STATUS_INACTIVE
+
+        task.status = LocalLLMRuntimeTask.STATUS_SUCCESS
+        task.stage = LocalLLMRuntimeTask.STAGE_COMPLETED
+        task.finished_at = timezone.now()
+        task.detail_message = success_message
+        task.error_message = ""
+        task.save(
+            update_fields=[
+                "status",
+                "stage",
+                "finished_at",
+                "detail_message",
+                "error_message",
+                "updated_at",
+            ]
+        )
+        state.status = success_status
+        state.is_busy = False
+        state.current_action = ""
+        state.last_task = task
+        state.last_message = task.detail_message
+        state.last_error = ""
+        state.save(
+            update_fields=[
+                "status",
+                "is_busy",
+                "current_action",
+                "last_task",
+                "last_message",
+                "last_error",
+                "updated_at",
+            ]
+        )
+    except Exception as ex:
+        task.status = LocalLLMRuntimeTask.STATUS_FAILED
+        task.stage = LocalLLMRuntimeTask.STAGE_COMPLETED
+        task.finished_at = timezone.now()
+        task.error_message = str(ex)
+        task.detail_message = "模型操作失败"
+        task.save(
+            update_fields=[
+                "status",
+                "stage",
+                "finished_at",
+                "error_message",
+                "detail_message",
+                "updated_at",
+            ]
+        )
+        state.status = LocalLLMRuntimeState.STATUS_FAILED
+        state.is_busy = False
+        state.current_action = ""
+        state.last_task = task
+        state.last_message = task.detail_message
+        state.last_error = task.error_message
+        state.save(
+            update_fields=[
+                "status",
+                "is_busy",
+                "current_action",
+                "last_task",
+                "last_message",
+                "last_error",
+                "updated_at",
+            ]
+        )
+    finally:
+        with LOCAL_LLM_RUNNING_TASK_IDS_LOCK:
+            LOCAL_LLM_RUNNING_TASK_IDS.discard(task_id)
+        close_old_connections()
+
+
+def _start_local_llm_runtime_task(task_id: int):
+    with LOCAL_LLM_RUNNING_TASK_IDS_LOCK:
+        if task_id in LOCAL_LLM_RUNNING_TASK_IDS:
+            return
+        LOCAL_LLM_RUNNING_TASK_IDS.add(task_id)
+    worker = threading.Thread(
+        target=_execute_local_llm_runtime_task,
+        args=(task_id,),
+        daemon=True,
+    )
+    worker.start()
 
 
 def _get_control_root() -> Path:
@@ -417,9 +1873,7 @@ def _get_agents_root() -> Path:
 
 
 def _get_agent_module_dir(module_name: str) -> Path:
-    if module_name not in ALLOWED_AGENT_MODULES:
-        raise ValueError(f"不支持的智能体模块: {module_name}")
-    return _get_agents_root() / module_name
+    return get_agent_module_dir(module_name)
 
 
 def _get_cursor_root() -> Path:
@@ -430,72 +1884,131 @@ def _get_skills_root() -> Path:
     return _get_cursor_root() / "skills"
 
 
-def _read_toolset_readme_summary(readme_path: Path) -> str:
-    if not readme_path.exists():
-        return "未找到 README.md"
-    try:
-        with open(readme_path, "r", encoding="utf-8") as fp:
-            for raw_line in fp:
-                line = str(raw_line).strip()
-                if not line:
-                    continue
-                if line.startswith("#"):
-                    continue
-                return line[:160]
-    except OSError:
-        return "README.md 读取失败"
-    return "README.md 暂无摘要内容"
+def _list_toolset_items(
+    keyword: str,
+    selected_os: str = OS_FILTER_ALL,
+    search_engine: str = SEARCH_ENGINE_AUTO,
+    search_mode: str = SEARCH_MODE_HYBRID,
+):
+    items = list_toolsets(keyword="", selected_os=selected_os)
+    normalized_keyword = str(keyword or "").strip()
+    if not normalized_keyword:
+        return items, {"engine_used": "native", "fallback_used": False, "error": ""}, []
 
-
-def _read_toolset_os_support(readme_path: Path):
-    if not readme_path.exists():
-        return list(SUPPORTED_SYSTEM_KEYS)
-    try:
-        text = readme_path.read_text(encoding="utf-8")
-    except OSError:
-        return list(SUPPORTED_SYSTEM_KEYS)
-    match = re.search(r"支持操作系统\s*[:：]\s*([^\r\n]+)", text, flags=re.IGNORECASE)
-    if not match:
-        return list(SUPPORTED_SYSTEM_KEYS)
-    return _normalize_supported_systems(match.group(1))
-
-
-def _list_toolset_items(keyword: str, selected_os: str = OS_FILTER_ALL):
-    tools_root = _get_tools_root()
-    normalized_keyword = str(keyword or "").strip().lower()
-    if not tools_root.exists() or not tools_root.is_dir():
-        return []
-
-    items = []
-    for entry in sorted(tools_root.iterdir(), key=lambda x: x.name.lower()):
-        if not entry.is_dir():
+    ranked_items, debug_meta = search_toolset_entries(
+        query=normalized_keyword,
+        search_mode=search_mode,
+        search_engine=search_engine,
+        top_k=max(20, len(items) * 2),
+    )
+    rank_map = {str(item.get("path") or "").strip(): item for item in ranked_items if str(item.get("path") or "").strip()}
+    filtered_items = []
+    for item in items:
+        directory = str(item.get("directory") or "").strip()
+        rank_info = rank_map.get(directory)
+        if not rank_info:
             continue
-        if entry.name.startswith(".") or entry.name.startswith("__"):
-            continue
-        if normalized_keyword and normalized_keyword not in entry.name.lower():
-            continue
-
-        readme_path = entry / "README.md"
-        os_support = _read_toolset_os_support(readme_path)
-        if not _is_os_match(os_support, selected_os):
-            continue
-        py_files = sorted(
-            [item.name for item in entry.iterdir() if item.is_file() and item.suffix == ".py"]
-        )
-        rel_dir = entry.relative_to(Project.get_core_project_path()).as_posix()
-        summary = _read_toolset_readme_summary(readme_path)
-        item = {
-            "name": entry.name,
-            "directory": rel_dir,
-            "readme_exists": readme_path.exists(),
-            "summary": summary,
-            "python_files": py_files,
-            "updated_at": datetime.fromtimestamp(entry.stat().st_mtime),
-            "os_support": os_support,
-            "os_support_text": _format_supported_systems_text(os_support),
+        merged = dict(item)
+        merged["search_score"] = float(rank_info.get("score") or 0.0)
+        merged["search_engine_used"] = str(debug_meta.get("engine_used") or "native")
+        filtered_items.append(merged)
+    filtered_items.sort(key=lambda it: (-float(it.get("search_score", 0.0)), str(it.get("name") or "")))
+    llm_preview = [
+        {
+            "path": str(item.get("path") or ""),
+            "name": str(item.get("name") or ""),
+            "score": float(item.get("score") or 0.0),
+            "description": str(item.get("description") or ""),
         }
-        items.append(item)
-    return items
+        for item in ranked_items[:10]
+    ]
+    return filtered_items, debug_meta, llm_preview
+
+
+def _build_toolset_page_context(
+    request,
+    keyword: str,
+    selected_os: str,
+    search_engine: str,
+    search_mode: str,
+):
+    current_runtime_os = _get_current_runtime_os()
+    normalized_os = _normalize_os_filter(selected_os, current_runtime_os)
+    normalized_engine = _normalize_search_engine(search_engine)
+    normalized_mode = _normalize_search_mode(search_mode)
+    all_toolsets, _, _ = _list_toolset_items("", OS_FILTER_ALL)
+    filtered_toolsets, debug_meta, llm_preview = _list_toolset_items(
+        keyword,
+        normalized_os,
+        search_engine=normalized_engine,
+        search_mode=normalized_mode,
+    )
+    context = _build_chat_context(request)
+    context.update(
+        {
+            "current_nav": "toolset_list",
+            "toolset_keyword": keyword,
+            "toolset_os": normalized_os,
+            "os_options": _build_os_options(),
+            "current_runtime_os": current_runtime_os,
+            "current_runtime_os_label": OS_LABELS.get(current_runtime_os, current_runtime_os),
+            "toolset_items": filtered_toolsets,
+            "toolset_total": len(all_toolsets),
+            "toolset_filtered": len(filtered_toolsets),
+            "search_engine": normalized_engine,
+            "search_mode": normalized_mode,
+            "search_engine_options": SEARCH_ENGINE_OPTIONS,
+            "search_mode_options": SEARCH_MODE_OPTIONS,
+            "search_debug_meta": debug_meta,
+            "search_llm_preview": llm_preview,
+        }
+    )
+    return context
+
+
+def _read_report_preview(report_path: str, max_chars: int = 12000) -> str:
+    try:
+        with open(report_path, "r", encoding="utf-8", errors="replace") as file_obj:
+            text = file_obj.read(max_chars)
+    except OSError:
+        return ""
+    return text.strip()
+
+
+def _run_knowledge_curation_for_project(current_project):
+    if not current_project:
+        return {"success": False, "error": "未找到当前项目，无法执行知识库整理。"}
+
+    project_root = Path(str(current_project.path or "")).resolve()
+    knowledge_dir = project_root / "doc" / "01-or"
+    output_dir = project_root / "data" / "temp" / "knowledge_reports"
+
+    tool = KnowledgeCurationTool()
+    result = tool.generate_report(
+        knowledge_dir=str(knowledge_dir),
+        output_dir=str(output_dir),
+    )
+    if not result.get("success"):
+        return {
+            "success": False,
+            "error": str(result.get("error") or "知识库整理执行失败。"),
+            "knowledge_dir": str(knowledge_dir),
+            "output_dir": str(output_dir),
+        }
+
+    payload = result.get("data") or {}
+    report_path = str(payload.get("report_path") or "").strip()
+    report_preview = _read_report_preview(report_path) if report_path else ""
+    return {
+        "success": True,
+        "knowledge_dir": str(knowledge_dir),
+        "output_dir": str(output_dir),
+        "report_path": report_path,
+        "report_preview": report_preview,
+        "health": payload.get("health") or {},
+        "links": payload.get("links") or {},
+        "duplicates": payload.get("duplicates") or {},
+    }
 
 
 def _read_text_file_summary(file_path: Path, default_text: str, max_length: int = 160) -> str:
@@ -580,62 +2093,294 @@ def _list_system_skill_items(keyword: str):
 
 
 def _list_agent_items(module_name: str, keyword: str):
-    module_dir = _get_agent_module_dir(module_name)
+    return list_agent_items_via_manager(module_name=module_name, keyword=keyword)
+
+
+def _search_agent_items_for_page(
+    module_name: str,
+    keyword: str,
+    search_engine: str,
+    search_mode: str,
+):
+    all_items = _list_agent_items(module_name, "")
+    normalized_keyword = str(keyword or "").strip()
+    if not normalized_keyword:
+        return all_items, {"engine_used": "native", "fallback_used": False, "error": ""}, []
+
+    ranked_items, debug_meta = search_agent_entries(
+        query=normalized_keyword,
+        allowed_agent_modules=[module_name],
+        search_mode=search_mode,
+        search_engine=search_engine,
+        top_k=max(20, len(all_items) * 2),
+    )
+    rank_map = {str(item.get("path") or "").strip(): item for item in ranked_items if str(item.get("path") or "").strip()}
+    filtered = []
+    for item in all_items:
+        directory = str(item.get("directory") or "").strip()
+        rank_info = rank_map.get(directory)
+        if not rank_info:
+            continue
+        merged = dict(item)
+        merged["search_score"] = float(rank_info.get("score") or 0.0)
+        filtered.append(merged)
+    filtered.sort(key=lambda it: (-float(it.get("search_score", 0.0)), str(it.get("name") or "")))
+    llm_preview = [
+        {
+            "path": str(item.get("path") or ""),
+            "name": str(item.get("name") or ""),
+            "score": float(item.get("score") or 0.0),
+            "description": str(item.get("description") or ""),
+        }
+        for item in ranked_items[:10]
+    ]
+    return filtered, debug_meta, llm_preview
+
+
+def _build_companion_module_label_text(values, module_label_map):
+    labels = []
+    for key in values or []:
+        label = module_label_map.get(key)
+        labels.append(f"{label}（{key}）" if label else key)
+    return "、".join(labels) if labels else "未配置"
+
+
+def _build_companion_plain_label_text(values):
+    result = [str(item or "").strip() for item in (values or []) if str(item or "").strip()]
+    return "、".join(result) if result else "未配置"
+
+
+def _build_companion_llm_source_text(companion):
+    if str(getattr(companion, "llm_routing_mode", "") or "").strip() == CompanionProfile.LLM_ROUTING_AUTO:
+        return "自动模式"
+    source = str(getattr(companion, "llm_source_type", "") or "").strip()
+    if source == CompanionProfile.LLM_SOURCE_LOCAL:
+        return "本地模型"
+    return "大模型 API"
+
+
+def _build_companion_backup_model_text(companion):
+    tokens = getattr(companion, "backup_model_tokens", None) or []
+    if not isinstance(tokens, list) or not tokens:
+        return "未配置"
+    result = []
+    for raw in tokens:
+        token = str(raw or "").strip()
+        parts = token.split("|", 2)
+        if len(parts) != 3:
+            continue
+        source = str(parts[0]).strip()
+        config_id = str(parts[1]).strip()
+        model_name = str(parts[2]).strip()
+        if not model_name:
+            continue
+        if source == CompanionProfile.LLM_SOURCE_LOCAL:
+            source_text = "本地"
+        else:
+            source_text = "API"
+        result.append(f"[{source_text}#{config_id}] {model_name}")
+    return "；".join(result) if result else "未配置"
+
+
+def _resolve_companion_knowledge_dir(current_project, companion):
+    if not current_project:
+        return None, "未找到当前项目，无法定位伙伴知识库目录。"
+
+    project_root = Path(str(current_project.path or "")).resolve()
+    knowledge_rel = str(companion.knowledge_path or "").strip().replace("\\", "/").lstrip("/")
+    if not knowledge_rel:
+        return None, "伙伴知识库路径为空。"
+
+    target_path = (project_root / knowledge_rel).resolve()
+    if target_path != project_root and not str(target_path).startswith(f"{project_root}{os.sep}"):
+        return None, "伙伴知识库路径超出当前项目目录。"
+    return target_path, ""
+
+
+def _build_companion_knowledge_relpath_preview(companion_name: str) -> str:
+    fragment = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(companion_name or "").strip()).strip("-").lower()
+    fragment = fragment[:80] or "companion"
+    return f"data/companions/{fragment}/knowledge"
+
+
+def _build_companion_items(companions, current_project, keyword, user=None, order_by_chat_time=False):
     normalized_keyword = str(keyword or "").strip().lower()
-    if not module_dir.exists() or not module_dir.is_dir():
-        return []
+    companion_list = list(companions)
+    session_by_marker = {}
+    latest_message_by_session_id = {}
+    if user and companion_list:
+        companion_markers = {}
+        for companion in companion_list:
+            companion_markers[_build_companion_chat_session_marker(companion.id)] = companion.id
+        chat_sessions = (
+            RequirementSession.objects.filter(
+                created_by=user,
+                content__in=list(companion_markers.keys()),
+            )
+            .order_by("-updated_at", "-id")
+        )
+        for session_obj in chat_sessions:
+            marker = str(session_obj.content or "").strip()
+            if marker in session_by_marker:
+                continue
+            session_by_marker[marker] = session_obj
+
+        session_ids = [item.id for item in session_by_marker.values()]
+        if session_ids:
+            latest_messages = RequirementMessage.objects.filter(session_id__in=session_ids).order_by(
+                "session_id", "-created_at", "-id"
+            )
+            for message in latest_messages:
+                if message.session_id in latest_message_by_session_id:
+                    continue
+                latest_message_by_session_id[message.session_id] = message
+
+    def _build_chat_summary(latest_message):
+        if not latest_message:
+            return "暂无聊天记录"
+        content = re.sub(r"\s+", " ", str(latest_message.content or "").strip())
+        if content:
+            role_text = "你" if latest_message.role == RequirementMessage.ROLE_USER else "助手"
+            return f"{role_text}：{content[:56]}{'...' if len(content) > 56 else ''}"
+        attachment_name = ""
+        if latest_message.attachment:
+            attachment_name = os.path.basename(str(latest_message.attachment.name or "").strip())
+        if attachment_name:
+            return f"[附件] {attachment_name}"
+        return "（空消息）"
 
     items = []
-    for entry in sorted(module_dir.iterdir(), key=lambda x: x.name.lower()):
-        if not entry.is_dir():
-            continue
-        if entry.name.startswith(".") or entry.name.startswith("__"):
-            continue
+    for companion in companion_list:
+        agent_modules = companion.get_allowed_agent_modules()
+        control_modules = companion.get_allowed_control_modules()
+        knowledge_dir, knowledge_error = _resolve_companion_knowledge_dir(current_project, companion)
+        knowledge_exists = bool(knowledge_dir and knowledge_dir.exists() and knowledge_dir.is_dir())
+        knowledge_file_count = 0
+        if knowledge_exists:
+            for candidate in knowledge_dir.rglob("*"):
+                if not candidate.is_file():
+                    continue
+                rel_obj = candidate.relative_to(knowledge_dir)
+                if _is_hidden_path(rel_obj):
+                    continue
+                knowledge_file_count += 1
 
-        readme_path = entry / "README.md"
-        rel_dir = entry.relative_to(Project.get_core_project_path()).as_posix()
-        summary = _read_text_file_summary(readme_path, "未找到 README.md")
-        key_files = sorted(
-            [
-                item.name
-                for item in entry.iterdir()
-                if item.is_file() and not item.name.startswith(".")
-            ]
-        )
-        searchable_text = f"{entry.name} {rel_dir} {summary}".lower()
+        searchable_text = (
+            f"{companion.name} {companion.display_name} {companion.role_title} "
+            f"{companion.persona} {companion.tone} {companion.knowledge_path} "
+            f"{','.join(agent_modules)} {','.join(control_modules)} "
+            f"{companion.allowed_toolsets_text} {companion.allowed_control_components_text} "
+            f"{companion.allowed_control_functions_text}"
+        ).lower()
         if normalized_keyword and normalized_keyword not in searchable_text:
             continue
+
+        companion_chat_marker = _build_companion_chat_session_marker(companion.id)
+        companion_chat_session = session_by_marker.get(companion_chat_marker)
+        latest_message = (
+            latest_message_by_session_id.get(companion_chat_session.id)
+            if companion_chat_session
+            else None
+        )
+        last_chat_at = latest_message.created_at if latest_message else (companion_chat_session.updated_at if companion_chat_session else None)
+        display_name = companion.display_name or companion.name
+        avatar_text = str(display_name or "?").strip()[:1].upper() if display_name else "?"
+
         items.append(
             {
-                "name": entry.name,
-                "directory": rel_dir,
-                "readme_exists": readme_path.exists(),
-                "summary": summary,
-                "key_files": key_files,
-                "updated_at": datetime.fromtimestamp(entry.stat().st_mtime),
+                "obj": companion,
+                "name": companion.name,
+                "display_name": companion.display_name,
+                "display_name_or_name": display_name,
+                "avatar_text": avatar_text,
+                "role_title": companion.role_title,
+                "persona": companion.persona,
+                "tone": companion.tone,
+                "memory_notes": companion.memory_notes,
+                "knowledge_path": companion.knowledge_path,
+                "is_active": companion.is_active,
+                "agent_modules": agent_modules,
+                "control_modules": control_modules,
+                "agent_modules_text": _build_companion_module_label_text(agent_modules, ALLOWED_AGENT_MODULES),
+                "control_modules_text": _build_companion_module_label_text(control_modules, ALLOWED_CONTROL_MODULES),
+                "toolsets_text": _build_companion_plain_label_text(companion.get_allowed_toolsets()),
+                "control_components_text": _build_companion_plain_label_text(companion.get_allowed_control_components()),
+                "control_functions_text": _build_companion_plain_label_text(companion.get_allowed_control_functions()),
+                "llm_source_text": _build_companion_llm_source_text(companion),
+                "llm_routing_mode_text": companion.get_llm_routing_mode_display(),
+                "is_local_llm_source": str(companion.llm_source_type or "").strip() == CompanionProfile.LLM_SOURCE_LOCAL,
+                "llm_api_config_name": companion.llm_api_config.name if companion.llm_api_config else "",
+                "local_llm_config_name": companion.local_llm_config.name if companion.local_llm_config else "",
+                "default_model_name": str(companion.default_model_name or "").strip(),
+                "backup_models_text": _build_companion_backup_model_text(companion),
+                "knowledge_exists": knowledge_exists,
+                "knowledge_file_count": knowledge_file_count,
+                "knowledge_error": knowledge_error,
+                "updated_at": companion.updated_at,
+                "chat_session_id": companion_chat_session.id if companion_chat_session else None,
+                "last_chat_at": last_chat_at,
+                "last_chat_summary": _build_chat_summary(latest_message),
             }
+        )
+    if order_by_chat_time:
+        items.sort(
+            key=lambda item: (
+                item.get("last_chat_at") is not None,
+                item.get("last_chat_at") or item.get("updated_at"),
+            ),
+            reverse=True,
         )
     return items
 
 
 def _resolve_agent_item_dir(module_name: str, item_name: str):
-    try:
-        module_dir = _get_agent_module_dir(module_name).resolve()
-    except ValueError as exc:
-        return "", None, str(exc)
-    if not module_dir.exists() or not module_dir.is_dir():
-        return "", None, "智能体模块目录不存在。"
+    return resolve_agent_item_dir_via_manager(module_name=module_name, item_name=item_name)
 
-    normalized = str(item_name or "").strip().replace("\\", "/").strip("/")
-    if not normalized or "/" in normalized or normalized in {".", ".."}:
-        return "", None, "智能体项名称不合法。"
 
-    target_dir = (module_dir / normalized).resolve()
-    if target_dir != module_dir and not str(target_dir).startswith(f"{module_dir}{os.sep}"):
-        return normalized, None, "智能体项路径超出允许范围。"
-    if not target_dir.exists() or not target_dir.is_dir():
-        return normalized, None, "智能体项目录不存在。"
-    return normalized, target_dir, ""
+def _run_knowledge_curation_for_companion(current_project, companion):
+    knowledge_dir, resolve_error = _resolve_companion_knowledge_dir(current_project, companion)
+    if resolve_error:
+        return {
+            "success": False,
+            "error": resolve_error,
+            "companion_id": companion.id,
+            "companion_name": companion.name,
+        }
+
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    project_root = Path(str(current_project.path or "")).resolve()
+    output_dir = project_root / "data" / "temp" / "knowledge_reports" / "companions" / str(companion.id)
+
+    tool = KnowledgeCurationTool()
+    result = tool.generate_report(
+        knowledge_dir=str(knowledge_dir),
+        output_dir=str(output_dir),
+    )
+    if not result.get("success"):
+        return {
+            "success": False,
+            "error": str(result.get("error") or "伙伴知识库整理执行失败。"),
+            "companion_id": companion.id,
+            "companion_name": companion.name,
+            "knowledge_dir": str(knowledge_dir),
+            "output_dir": str(output_dir),
+        }
+
+    payload = result.get("data") or {}
+    report_path = str(payload.get("report_path") or "").strip()
+    report_preview = _read_report_preview(report_path) if report_path else ""
+    return {
+        "success": True,
+        "companion_id": companion.id,
+        "companion_name": companion.name,
+        "knowledge_dir": str(knowledge_dir),
+        "output_dir": str(output_dir),
+        "report_path": report_path,
+        "report_preview": report_preview,
+        "health": payload.get("health") or {},
+        "links": payload.get("links") or {},
+        "duplicates": payload.get("duplicates") or {},
+    }
 
 
 def _list_system_rule_items(keyword: str):
@@ -1282,30 +3027,318 @@ def _run_control_api_test_task(task_id: int, module_name: str, function_path: st
 
 @login_required
 def session_list(request):
-    return render(request, "collector/session_list.html", _build_chat_context(request))
+    context = _build_chat_context(request)
+    context["active_session"] = context.get("chat_session")
+    context["messages"] = _build_messages_with_process_trace(context.get("chat_session"))
+    context["is_summary_view"] = False
+    return render(request, "collector/session_list.html", context)
+
+
+def _build_chat_page_context_by_session(request, session_obj, message_form=None):
+    if _is_main_chat_session(session_obj):
+        return _build_chat_context(request, active_session=session_obj, message_form=message_form, chat_session=session_obj)
+    companion_id = _get_companion_id_from_chat_session(session_obj)
+    if not companion_id:
+        return _build_chat_context(request, active_session=session_obj, message_form=message_form, chat_session=session_obj)
+    current_project = _get_current_project(request)
+    companion = CompanionProfile.objects.filter(
+        id=companion_id,
+        created_by=request.user,
+        project=current_project,
+    ).first()
+    return _build_chat_context(
+        request,
+        active_session=session_obj,
+        message_form=message_form,
+        chat_session=session_obj,
+        companion_chat=companion,
+    )
+
+
+def _redirect_for_chat_session(session_obj):
+    if _is_main_chat_session(session_obj):
+        return redirect("session_list")
+    companion_id = _get_companion_id_from_chat_session(session_obj)
+    if companion_id:
+        return redirect("companion_chat", companion_id=companion_id)
+    return redirect("session_detail", session_id=session_obj.id)
+
+
+@login_required
+def companion_chat(request, companion_id):
+    current_project = _get_current_project(request)
+    companion = get_object_or_404(
+        CompanionProfile.objects.filter(created_by=request.user, project=current_project),
+        id=companion_id,
+    )
+    chat_session = _get_or_create_companion_chat_session(
+        request,
+        companion=companion,
+        current_project=current_project,
+    )
+    context = _build_chat_context(
+        request,
+        active_session=chat_session,
+        chat_session=chat_session,
+        companion_chat=companion,
+    )
+    context["messages"] = _build_messages_with_process_trace(chat_session)
+    context["is_summary_view"] = False
+    return render(request, "collector/session_list.html", context)
+
+
+def _build_companion_permission_choices():
+    toolset_items = list_toolsets(keyword="", selected_os="all")
+    toolset_choices = []
+    for item in toolset_items:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        summary = str(item.get("summary") or "").strip()
+        label = f"{name}（{summary[:40]}）" if summary else name
+        toolset_choices.append((name, label))
+
+    control_component_choices = []
+    control_function_choices = []
+    control_function_component_map = {}
+    component_tool = ComponentCallTool(auto_install=False)
+    info_result = component_tool.control_info()
+    if isinstance(info_result, dict) and bool(info_result.get("success")):
+        payload = info_result.get("data") if isinstance(info_result.get("data"), dict) else {}
+        modules = payload.get("modules") if isinstance(payload, dict) else []
+        functions = payload.get("functions") if isinstance(payload, dict) else []
+        component_name_map = {}
+        if isinstance(modules, list):
+            for module_item in modules:
+                if not isinstance(module_item, dict):
+                    continue
+                components = module_item.get("components")
+                if not isinstance(components, list):
+                    continue
+                for component_item in components:
+                    if not isinstance(component_item, dict):
+                        continue
+                    component_key = str(component_item.get("component_key") or "").strip()
+                    if not component_key:
+                        continue
+                    component_label = str(component_item.get("name") or "").strip()
+                    component_name_map[component_key] = component_label
+
+        if isinstance(functions, list):
+            seen_component = set()
+            seen_function = set()
+            for function_item in functions:
+                if not isinstance(function_item, dict):
+                    continue
+                function_path = str(function_item.get("path") or "").strip()
+                if not function_path.startswith("component."):
+                    continue
+                parts = function_path.split(".")
+                if len(parts) < 3:
+                    continue
+                module_name = parts[1]
+                if module_name not in ALLOWED_CONTROL_MODULES:
+                    continue
+                component_key = str(function_item.get("component_key") or "").strip()
+                if component_key:
+                    control_function_component_map[function_path] = component_key
+                if component_key and component_key not in seen_component:
+                    component_name = component_name_map.get(component_key) or component_key.split(".")[-1]
+                    control_component_choices.append((component_key, f"{component_name}（{component_key}）"))
+                    seen_component.add(component_key)
+                if function_path in seen_function:
+                    continue
+                description = str(function_item.get("description") or "").strip()
+                if description:
+                    label = f"{function_path}（{description[:44]}）"
+                else:
+                    label = function_path
+                control_function_choices.append((function_path, label))
+                seen_function.add(function_path)
+    return {
+        "toolset_choices": tuple(toolset_choices),
+        "control_component_choices": tuple(control_component_choices),
+        "control_function_choices": tuple(control_function_choices),
+        "control_function_component_map": control_function_component_map,
+    }
+
+
+@login_required
+def companion_list(request):
+    keyword = request.GET.get("q", "").strip()
+    context = _build_chat_context(request)
+    current_project = context.get("current_project")
+    companions = (
+        CompanionProfile.objects.filter(created_by=request.user, project=current_project)
+        .select_related("llm_api_config", "local_llm_config")
+        .order_by("-updated_at", "name")
+    )
+    all_items = _build_companion_items(
+        companions,
+        current_project=current_project,
+        keyword="",
+        user=request.user,
+        order_by_chat_time=True,
+    )
+    filtered_items = _build_companion_items(
+        companions,
+        current_project=current_project,
+        keyword=keyword,
+        user=request.user,
+        order_by_chat_time=True,
+    )
+    context.update(
+        {
+            "current_nav": "companions",
+            "companion_keyword": keyword,
+            "companion_items": filtered_items,
+            "companion_total": len(all_items),
+            "companion_filtered": len(filtered_items),
+            "companion_agent_module_map": ALLOWED_AGENT_MODULES,
+            "companion_control_module_map": ALLOWED_CONTROL_MODULES,
+        }
+    )
+    return render(request, "collector/companion_list.html", context)
+
+
+@login_required
+def companion_create(request):
+    context = _build_chat_context(request)
+    current_project = context.get("current_project")
+    permission_choices = _build_companion_permission_choices()
+    form_kwargs = {
+        "agent_module_choices": tuple((key, f"{label}（{key}）") for key, label in ALLOWED_AGENT_MODULES.items()),
+        "control_module_choices": tuple((key, f"{label}（{key}）") for key, label in ALLOWED_CONTROL_MODULES.items()),
+        "toolset_choices": permission_choices["toolset_choices"],
+        "control_component_choices": permission_choices["control_component_choices"],
+        "control_function_choices": permission_choices["control_function_choices"],
+        "control_function_component_map": permission_choices["control_function_component_map"],
+        "user": request.user,
+    }
+    form = CompanionProfileForm(request.POST or None, **form_kwargs)
+    if request.method == "POST":
+        if not current_project:
+            messages.error(request, "当前项目不存在，无法创建伙伴。")
+        elif form.is_valid():
+            companion = form.save(commit=False)
+            companion.created_by = request.user
+            companion.project = current_project
+            companion.save()
+            messages.success(request, f"伙伴 {companion.display_name or companion.name} 创建成功。")
+            return redirect("companion_list")
+        else:
+            messages.error(request, "伙伴创建失败，请检查输入项。")
+
+    context.update(
+        {
+            "current_nav": "companions",
+            "companion_form": form,
+            "companion_form_mode": "create",
+            "companion_page_title": "新增伙伴",
+            "companion_submit_text": "创建伙伴",
+            "companion_knowledge_path_display": _build_companion_knowledge_relpath_preview(
+                (form.data.get("name") if form.is_bound else "") or "companion"
+            ),
+        }
+    )
+    return render(request, "collector/companion_form.html", context)
+
+
+@login_required
+def companion_edit(request, companion_id):
+    context = _build_chat_context(request)
+    current_project = context.get("current_project")
+    companion = get_object_or_404(
+        CompanionProfile,
+        id=companion_id,
+        created_by=request.user,
+        project=current_project,
+    )
+    permission_choices = _build_companion_permission_choices()
+    form_kwargs = {
+        "agent_module_choices": tuple((key, f"{label}（{key}）") for key, label in ALLOWED_AGENT_MODULES.items()),
+        "control_module_choices": tuple((key, f"{label}（{key}）") for key, label in ALLOWED_CONTROL_MODULES.items()),
+        "toolset_choices": permission_choices["toolset_choices"],
+        "control_component_choices": permission_choices["control_component_choices"],
+        "control_function_choices": permission_choices["control_function_choices"],
+        "control_function_component_map": permission_choices["control_function_component_map"],
+        "user": request.user,
+        "instance": companion,
+    }
+    action = str(request.POST.get("action", "")).strip() if request.method == "POST" else ""
+    if request.method == "POST" and action != "run_companion_knowledge_curation":
+        form = CompanionProfileForm(request.POST, **form_kwargs)
+    else:
+        form = CompanionProfileForm(**form_kwargs)
+    if request.method == "POST":
+        if action == "run_companion_knowledge_curation":
+            run_result = _run_knowledge_curation_for_companion(current_project=current_project, companion=companion)
+            if run_result.get("success"):
+                messages.success(request, "伙伴知识库整理执行完成。")
+            else:
+                messages.error(request, str(run_result.get("error") or "伙伴知识库整理执行失败。"))
+            return redirect("companion_edit", companion_id=companion.id)
+        elif form.is_valid():
+            companion = form.save()
+            messages.success(request, f"伙伴 {companion.display_name or companion.name} 配置已更新。")
+            return redirect("companion_list")
+        else:
+            messages.error(request, "伙伴配置保存失败，请检查输入项。")
+
+    context.update(
+        {
+            "current_nav": "companions",
+            "current_companion_nav_id": companion.id,
+            "companion_form": form,
+            "companion_form_mode": "edit",
+            "companion_page_title": f"编辑伙伴：{companion.display_name or companion.name}",
+            "companion_submit_text": "保存配置",
+            "companion_obj": companion,
+            "companion_knowledge_path_display": companion.knowledge_path,
+            "companion_agent_modules_text": _build_companion_module_label_text(
+                companion.get_allowed_agent_modules(), ALLOWED_AGENT_MODULES
+            ),
+            "companion_control_modules_text": _build_companion_module_label_text(
+                companion.get_allowed_control_modules(), ALLOWED_CONTROL_MODULES
+            ),
+            "companion_toolsets_text": _build_companion_plain_label_text(companion.get_allowed_toolsets()),
+            "companion_control_components_text": _build_companion_plain_label_text(
+                companion.get_allowed_control_components()
+            ),
+            "companion_control_functions_text": _build_companion_plain_label_text(
+                companion.get_allowed_control_functions()
+            ),
+        }
+    )
+    return render(request, "collector/companion_form.html", context)
 
 
 @login_required
 def toolset_list(request):
-    keyword = request.GET.get("q", "").strip()
-    current_runtime_os = _get_current_runtime_os()
-    selected_os = _normalize_os_filter(request.GET.get("os", ""), current_runtime_os)
-    all_toolsets = _list_toolset_items("", OS_FILTER_ALL)
-    toolsets = _list_toolset_items(keyword, selected_os)
-    context = _build_chat_context(request)
-    context.update(
-        {
-            "current_nav": "toolset_list",
-            "toolset_keyword": keyword,
-            "toolset_os": selected_os,
-            "os_options": _build_os_options(),
-            "current_runtime_os": current_runtime_os,
-            "current_runtime_os_label": OS_LABELS.get(current_runtime_os, current_runtime_os),
-            "toolset_items": toolsets,
-            "toolset_total": len(all_toolsets),
-            "toolset_filtered": len(toolsets),
-        }
+    request_data = request.POST if request.method == "POST" else request.GET
+    keyword = request_data.get("q", "").strip()
+    selected_os = request_data.get("os", "")
+    search_engine = request_data.get("search_engine", "").strip()
+    search_mode = request_data.get("search_mode", "").strip()
+    context = _build_toolset_page_context(
+        request,
+        keyword=keyword,
+        selected_os=selected_os,
+        search_engine=search_engine,
+        search_mode=search_mode,
     )
+
+    if request.method == "POST":
+        action = str(request.POST.get("action", "")).strip()
+        if action == "run_knowledge_curation":
+            run_result = _run_knowledge_curation_for_project(context.get("current_project"))
+            if run_result.get("success"):
+                context["knowledge_curation_notice"] = "知识库整理执行完成。"
+                context["knowledge_curation_result"] = run_result
+            else:
+                context["knowledge_curation_error"] = str(run_result.get("error") or "知识库整理执行失败。")
+                context["knowledge_curation_result"] = run_result
+
     return render(request, "collector/toolset_list.html", context)
 
 
@@ -1316,8 +3349,15 @@ def agent_item_list(request, module_name):
         return redirect("session_list")
 
     keyword = request.GET.get("q", "").strip()
+    search_engine = _normalize_search_engine(request.GET.get("search_engine", ""))
+    search_mode = _normalize_search_mode(request.GET.get("search_mode", ""))
     all_items = _list_agent_items(module_name, "")
-    filtered_items = _list_agent_items(module_name, keyword)
+    filtered_items, debug_meta, llm_preview = _search_agent_items_for_page(
+        module_name=module_name,
+        keyword=keyword,
+        search_engine=search_engine,
+        search_mode=search_mode,
+    )
     context = _build_chat_context(request)
     context.update(
         {
@@ -1328,6 +3368,12 @@ def agent_item_list(request, module_name):
             "agent_items": filtered_items,
             "agent_total": len(all_items),
             "agent_filtered": len(filtered_items),
+            "search_engine": search_engine,
+            "search_mode": search_mode,
+            "search_engine_options": SEARCH_ENGINE_OPTIONS,
+            "search_mode_options": SEARCH_MODE_OPTIONS,
+            "search_debug_meta": debug_meta,
+            "search_llm_preview": llm_preview,
         }
     )
     return render(request, "collector/agent_item_list.html", context)
@@ -1605,11 +3651,52 @@ def control_function_list(request, module_name):
         return redirect("session_list")
 
     keyword = request.GET.get("q", "").strip()
+    search_engine = _normalize_search_engine(request.GET.get("search_engine", ""))
+    search_mode = _normalize_search_mode(request.GET.get("search_mode", ""))
     current_runtime_os = _get_current_runtime_os()
     selected_os = _normalize_os_filter(request.GET.get("os", ""), current_runtime_os)
     module_info = _load_control_module_info(module_name)
     all_functions = module_info.get("functions", []) if isinstance(module_info, dict) else []
     keyword_filtered_functions = _filter_control_functions(all_functions, keyword)
+    llm_preview = []
+    search_debug_meta = {"engine_used": "native", "fallback_used": False, "error": ""}
+    if keyword:
+        ranked_functions, search_debug_meta = search_component_functions(
+            query=keyword,
+            allowed_control_modules=[module_name],
+            search_mode=search_mode,
+            search_engine=search_engine,
+            top_k=max(20, len(all_functions) * 2),
+        )
+        rank_map = {
+            str(item.get("path") or "").strip(): item
+            for item in ranked_functions
+            if str(item.get("path") or "").strip()
+        }
+        zvec_filtered = []
+        for item in keyword_filtered_functions:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            rank_info = rank_map.get(path)
+            if not rank_info:
+                continue
+            merged = dict(item)
+            merged["search_score"] = float(rank_info.get("score") or 0.0)
+            zvec_filtered.append(merged)
+        keyword_filtered_functions = sorted(
+            zvec_filtered,
+            key=lambda it: (-float(it.get("search_score", 0.0)), str(it.get("path") or "")),
+        )
+        llm_preview = [
+            {
+                "path": str(item.get("path") or ""),
+                "name": str(item.get("name") or ""),
+                "score": float(item.get("score") or 0.0),
+                "description": str(item.get("description") or ""),
+            }
+            for item in ranked_functions[:10]
+        ]
     all_component_items = _build_control_component_items(module_name, module_info)
     all_component_map = {item["component_key"]: item for item in all_component_items}
     component_items = [item for item in all_component_items if _is_os_match(item.get("os_support", []), selected_os)]
@@ -1645,6 +3732,7 @@ def control_function_list(request, module_name):
     context = _build_chat_context(request)
     context.update(
         {
+            "current_nav": "control_components",
             "control_active_module": module_name,
             "control_module_name": ALLOWED_CONTROL_MODULES[module_name],
             "control_keyword": keyword,
@@ -1659,6 +3747,12 @@ def control_function_list(request, module_name):
             "control_ungrouped_functions": ungrouped_functions,
             "control_function_total": len(all_functions),
             "control_function_filtered": len(filtered_functions),
+            "search_engine": search_engine,
+            "search_mode": search_mode,
+            "search_engine_options": SEARCH_ENGINE_OPTIONS,
+            "search_mode_options": SEARCH_MODE_OPTIONS,
+            "search_debug_meta": search_debug_meta,
+            "search_llm_preview": llm_preview,
         }
     )
     return render(request, "collector/control_function_list.html", context)
@@ -1701,11 +3795,15 @@ def control_component_toggle_enabled(request, module_name, component_key):
     redirect_url = reverse("control_function_list", kwargs={"module_name": module_name})
     keyword = str(request.POST.get("q", "")).strip()
     selected_os = _normalize_os_filter(request.POST.get("os", ""), _get_current_runtime_os())
+    search_engine = _normalize_search_engine(request.POST.get("search_engine", ""))
+    search_mode = _normalize_search_mode(request.POST.get("search_mode", ""))
     query_args = {}
     if keyword:
         query_args["q"] = keyword
     if selected_os:
         query_args["os"] = selected_os
+    query_args["search_engine"] = search_engine
+    query_args["search_mode"] = search_mode
     if query_args:
         redirect_url = f"{redirect_url}?{urlencode(query_args)}"
     return redirect(redirect_url)
@@ -1812,6 +3910,7 @@ def control_function_test(request, module_name):
     context = _build_chat_context(request)
     context.update(
         {
+            "current_nav": "control_components",
             "control_active_module": module_name,
             "control_module_name": ALLOWED_CONTROL_MODULES[module_name],
             "function_path": function_path,
@@ -1982,6 +4081,7 @@ def component_system_param_config(request, module_name, component_key):
     context = _build_chat_context(request)
     context.update(
         {
+            "current_nav": "control_components",
             "control_active_module": module_name,
             "control_module_name": ALLOWED_CONTROL_MODULES[module_name],
             "component_key": component_key,
@@ -2250,75 +4350,20 @@ def requirement_file_list(request):
 
 @login_required
 def session_detail(request, session_id):
-    active_session = get_object_or_404(
+    target_session = get_object_or_404(
         RequirementSession.objects.filter(created_by=request.user), id=session_id
     )
-    # 将会话的项目设为当前项目
-    if active_session.project:
-        request.session['current_project_id'] = active_session.project.id
-
-    return render(
-        request,
-        "collector/session_list.html",
-        _build_chat_context(request, active_session=active_session),
-    )
+    if _is_main_chat_session(target_session):
+        return redirect("session_list")
+    companion_id = _get_companion_id_from_chat_session(target_session)
+    if companion_id:
+        return redirect("companion_chat", companion_id=companion_id)
+    return render(request, "collector/session_list.html", _build_chat_context(request, active_session=target_session))
 
 
 @login_required
 def session_create(request):
-    if request.method != "POST":
-        return redirect("session_list")
-
-    message_form = ChatMessageForm(request.POST, request.FILES)
-    if message_form.is_valid():
-        user_content = message_form.cleaned_data["content"]
-        user_attachment = message_form.cleaned_data["attachment"]
-
-        # 检查是否既没有文本也没有附件
-        if not user_content and not user_attachment:
-            messages.error(request, "请输入消息内容或上传附件。")
-            return render(
-                request,
-                "collector/session_list.html",
-                _build_chat_context(request, message_form=message_form),
-            )
-
-        # 获取当前项目
-        current_project = _get_current_project(request)
-
-        session = RequirementSession.objects.create(
-            title=_generate_session_title(user_content or "附件消息"),
-            content="",
-            created_by=request.user,
-            project=current_project,
-        )
-        user_message = RequirementMessage.objects.create(
-            session=session,
-            role=RequirementMessage.ROLE_USER,
-            content=user_content,
-            attachment=user_attachment,  # 保存附件
-        )
-
-        # 使用大模型分析需求
-        analysis_result = analyzer.analyze_requirement(
-            user_content,
-            llm_model=current_project.llm_model,
-            latest_attachment_path=user_message.attachment.path if user_message.attachment else None,
-        )
-
-        RequirementMessage.objects.create(
-            session=session,
-            role=RequirementMessage.ROLE_ASSISTANT,
-            content=analysis_result["response"],
-        )
-        session.save()
-        return redirect("session_detail", session_id=session.id)
-
-    return render(
-        request,
-        "collector/session_list.html",
-        _build_chat_context(request, message_form=message_form),
-    )
+    return redirect("session_list")
 
 
 @login_required
@@ -2326,9 +4371,13 @@ def session_send(request, session_id):
     if request.method != "POST":
         return redirect("session_detail", session_id=session_id)
 
+    current_project = _get_current_project(request)
     active_session = get_object_or_404(
-        RequirementSession.objects.filter(created_by=request.user), id=session_id
+        RequirementSession.objects.filter(created_by=request.user),
+        id=session_id,
     )
+    if not (_is_main_chat_session(active_session) or _is_companion_chat_session(active_session)):
+        return redirect("session_list")
     message_form = ChatMessageForm(request.POST, request.FILES)
     if message_form.is_valid():
         user_content = message_form.cleaned_data["content"]
@@ -2354,9 +4403,7 @@ def session_send(request, session_id):
             return render(
                 request,
                 "collector/session_list.html",
-                _build_chat_context(
-                    request, active_session=active_session, message_form=message_form
-                ),
+                _build_chat_page_context_by_session(request, active_session, message_form=message_form),
             )
 
         RequirementMessage.objects.create(
@@ -2366,118 +4413,252 @@ def session_send(request, session_id):
             attachment=user_attachment,  # 保存附件
         )
 
-        # 获取对话历史
-        conversation_history = []
-        for msg in active_session.messages.all():
-            conversation_history.append(_serialize_message_for_llm(msg))
-
-        # 根据会话阶段处理
-        if active_session.phase == RequirementSession.PHASE_COLLECTING:
-            # 第一阶段：收集需求，判断是否完成
-            analysis_result = analyzer.analyze_requirement(user_content, conversation_history, llm_model=active_session.project.llm_model)
-            decision = requirement_session_command.decide_transition(
-                phase=active_session.phase,
-                user_content=user_content,
-                analysis_is_complete=bool(analysis_result.get("is_complete")),
+        selected_project = active_session.project or current_project
+        conversation_history = _build_chat_conversation_history(
+            active_session,
+            current_project=selected_project,
+        )
+        selected_llm_model = _resolve_chat_llm_for_session(
+            active_session,
+            current_project=selected_project,
+        )
+        companion = _resolve_companion_for_chat_session(active_session)
+        if companion:
+            orchestration_context = _build_companion_orchestration_context(
+                session_obj=active_session,
+                companion=companion,
+                current_project=selected_project,
+                selected_llm_model=selected_llm_model,
             )
-            if decision.should_enter_organizing:
-                # 用户确认完成，进入第二阶段
-                active_session.phase = RequirementSession.PHASE_ORGANIZING
-                active_session.save()
-
-                # 读取项目规则
-                project_rules = _get_project_rules(active_session.project)
-
-                # 整理需求
-                organize_result = analyzer.organize_requirement(conversation_history, project_rules, llm_model=active_session.project.llm_model)
-
-                if organize_result["success"]:
-                    # 保存生成的文档到会话
-                    active_session.content = organize_result["document"]
-                    active_session.title = organize_result["title"]
-                    active_session.save()
-
-                    # 保存文档到项目目录
-                    _save_requirement_document(active_session, organize_result, request)
-
-                    response_text = f"""需求整理完成！
-
-已生成原始需求文档：{organize_result["title"]}.md
-
-文档内容：
-{organize_result["document"]}
-
-如需修改，请继续对话；如确认无误，会话将标记为完成。"""
-                else:
-                    response_text = f"需求整理时出错：{organize_result['error']}"
-
-                RequirementMessage.objects.create(
-                    session=active_session,
-                    role=RequirementMessage.ROLE_ASSISTANT,
-                    content=response_text,
-                )
-            else:
-                # 继续第一阶段
-                RequirementMessage.objects.create(
-                    session=active_session,
-                    role=RequirementMessage.ROLE_ASSISTANT,
-                    content=analysis_result["response"],
-                )
-
-        elif active_session.phase == RequirementSession.PHASE_ORGANIZING:
-            # 第二阶段：用户可能需要修改需求文档
-            # 重新整理需求
-            project_rules = _get_project_rules(active_session.project)
-            organize_result = analyzer.organize_requirement(conversation_history, project_rules, llm_model=active_session.project.llm_model)
-
-            if organize_result["success"]:
-                active_session.content = organize_result["document"]
-                active_session.save()
-
-                # 保存更新后的文档
-                _save_requirement_document(active_session, organize_result, request)
-
-                response_text = f"""需求文档已更新：{organize_result["title"]}.md
-
-更新后的内容：
-{organize_result["document"]}
-
-如需继续修改请说明；如确认无误，请输入"确认完成"。"""
-            else:
-                response_text = f"更新文档时出错：{organize_result['error']}"
-
-            RequirementMessage.objects.create(
-                session=active_session,
-                role=RequirementMessage.ROLE_ASSISTANT,
-                content=response_text,
+            orchestration_result = run_companion_orchestration(orchestration_context)
+            response_text = str(orchestration_result.get("final_answer") or "").strip()
+            if not response_text:
+                response_text = str(orchestration_result.get("error") or "伙伴协同执行失败，请稍后重试。")
+        else:
+            chat_result = analyzer.chat(
+                conversation_history=conversation_history,
+                llm_model=selected_llm_model,
             )
+            response_text = str(chat_result.get("response") or "").strip()
+            if not response_text:
+                response_text = str(chat_result.get("error") or "助手暂时无法回复，请稍后重试。")
 
-            decision = requirement_session_command.decide_transition(
-                phase=active_session.phase,
-                user_content=user_content,
-                analysis_is_complete=False,
-            )
-            if decision.should_mark_completed:
-                active_session.phase = RequirementSession.PHASE_COMPLETED
-                active_session.save()
-
-                RequirementMessage.objects.create(
-                    session=active_session,
-                    role=RequirementMessage.ROLE_ASSISTANT,
-                    content="会话已完成！原始需求文档已保存。",
-                )
+        RequirementMessage.objects.create(
+            session=active_session,
+            role=RequirementMessage.ROLE_ASSISTANT,
+            content=response_text,
+        )
 
         active_session.save()
         _clear_rollback_draft(request, active_session.id)
-        return redirect("session_detail", session_id=active_session.id)
+        return _redirect_for_chat_session(active_session)
 
     return render(
         request,
         "collector/session_list.html",
-        _build_chat_context(
-            request, active_session=active_session, message_form=message_form
-        ),
+        _build_chat_page_context_by_session(request, active_session, message_form=message_form),
     )
+
+
+@login_required
+def session_send_async(request, session_id):
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "仅支持 POST 请求。"}, status=405)
+
+    active_session = get_object_or_404(
+        RequirementSession.objects.filter(created_by=request.user),
+        id=session_id,
+    )
+    if not (_is_main_chat_session(active_session) or _is_companion_chat_session(active_session)):
+        return JsonResponse({"success": False, "error": "当前会话为只读，不支持发送消息。"}, status=400)
+    message_form = ChatMessageForm(request.POST, request.FILES)
+    if not message_form.is_valid():
+        return JsonResponse({"success": False, "error": "消息参数不合法。"}, status=400)
+
+    user_content = message_form.cleaned_data["content"]
+    user_attachment = message_form.cleaned_data["attachment"]
+    rollback_draft = _get_rollback_draft(request, active_session.id) or {}
+    rollback_attachment_path = rollback_draft.get("attachment_path", "")
+    rollback_attachment_name = rollback_draft.get("attachment_name", "")
+
+    if (not user_attachment) and rollback_attachment_path and os.path.exists(rollback_attachment_path):
+        try:
+            with open(rollback_attachment_path, "rb") as rollback_file:
+                from django.core.files.uploadedfile import SimpleUploadedFile
+
+                user_attachment = SimpleUploadedFile(
+                    rollback_attachment_name or os.path.basename(rollback_attachment_path),
+                    rollback_file.read(),
+                )
+        except OSError:
+            user_attachment = None
+
+    if not user_content and not user_attachment:
+        return JsonResponse({"success": False, "error": "请输入消息内容或上传附件。"}, status=400)
+
+    user_message = RequirementMessage.objects.create(
+        session=active_session,
+        role=RequirementMessage.ROLE_USER,
+        content=user_content,
+        attachment=user_attachment,
+    )
+    assistant_message = RequirementMessage.objects.create(
+        session=active_session,
+        role=RequirementMessage.ROLE_ASSISTANT,
+        content="思考中...",
+    )
+
+    reply_task = ChatReplyTask.objects.create(
+        session=active_session,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        created_by=request.user,
+        status=ChatReplyTask.STATUS_PENDING,
+    )
+    worker = threading.Thread(target=_run_chat_reply_task, args=(reply_task.id,), daemon=True)
+    worker.start()
+    _clear_rollback_draft(request, active_session.id)
+
+    return JsonResponse(
+        {
+            "success": True,
+            "task_id": reply_task.id,
+            "user_message": {
+                "id": user_message.id,
+                "content": user_message.content,
+                "attachment_name": os.path.basename(user_message.attachment.name) if user_message.attachment else "",
+                "created_at": user_message.created_at.strftime("%H:%M:%S"),
+            },
+            "assistant_message": {
+                "id": assistant_message.id,
+                "content": assistant_message.content,
+                "created_at": assistant_message.created_at.strftime("%H:%M:%S"),
+            },
+        }
+    )
+
+
+@login_required
+def chat_reply_task_status(request, session_id, task_id):
+    task = get_object_or_404(
+        ChatReplyTask.objects.select_related("assistant_message", "session"),
+        id=task_id,
+        session_id=session_id,
+        created_by=request.user,
+    )
+    assistant_text = task.assistant_message.content if task.assistant_message else ""
+    is_done = task.status in {
+        ChatReplyTask.STATUS_COMPLETED,
+        ChatReplyTask.STATUS_STOPPED,
+        ChatReplyTask.STATUS_FAILED,
+    }
+    orchestration_meta = _get_chat_orchestration_meta(task.id)
+    process_trace = _normalize_process_trace(task.execution_trace)
+    if not process_trace.get("token_usage"):
+        process_trace["token_usage"] = _normalize_token_usage(orchestration_meta.get("token_usage"))
+    if not process_trace.get("events"):
+        # 兼容旧内存态数据
+        plan_steps = orchestration_meta.get("plan_steps", [])
+        if isinstance(plan_steps, list) and plan_steps:
+            for step in plan_steps:
+                if not isinstance(step, dict):
+                    continue
+                _append_process_trace_event(
+                    process_trace,
+                    kind="thinking",
+                    title=f"步骤 {step.get('step_id') or ''}",
+                    status=str(step.get("status") or "success"),
+                    input_data={"executor": step.get("executor")},
+                    output_data=step.get("output"),
+                    error=str(step.get("error") or ""),
+                    token_usage=_normalize_token_usage(
+                        (step.get("output") or {}).get("token_usage")
+                        if isinstance(step.get("output"), dict)
+                        else {}
+                    ),
+                )
+    return JsonResponse(
+        {
+            "success": True,
+            "task_id": task.id,
+            "status": task.status,
+            "is_done": is_done,
+            "content": assistant_text,
+            "error": task.error_message or "",
+            "plan_steps": orchestration_meta.get("plan_steps", []),
+            "active_agent": orchestration_meta.get("active_agent", ""),
+            "tool_events": orchestration_meta.get("tool_events", []),
+            "fallback_used": bool(orchestration_meta.get("fallback_used", False)),
+            "process_trace": process_trace,
+            "token_usage": _normalize_token_usage(process_trace.get("token_usage")),
+        }
+    )
+
+
+@login_required
+def chat_reply_task_stop(request, session_id, task_id):
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "仅支持 POST 请求。"}, status=405)
+
+    task = get_object_or_404(
+        ChatReplyTask.objects.select_related("session"),
+        id=task_id,
+        session_id=session_id,
+        created_by=request.user,
+    )
+    if task.status in {
+        ChatReplyTask.STATUS_COMPLETED,
+        ChatReplyTask.STATUS_STOPPED,
+        ChatReplyTask.STATUS_FAILED,
+    }:
+        return JsonResponse({"success": True, "status": task.status, "already_done": True})
+
+    task.stop_requested = True
+    task.save(update_fields=["stop_requested", "updated_at"])
+    return JsonResponse({"success": True, "status": task.status, "stop_requested": True})
+
+
+@login_required
+def session_extract_summary(request, session_id, message_id):
+    if request.method != "POST":
+        return redirect("session_list")
+
+    current_project = _get_current_project(request)
+    chat_session = _get_or_create_main_chat_session(request, current_project=current_project)
+    if int(session_id) != int(chat_session.id):
+        messages.error(request, "仅支持从主聊天会话提炼总结。")
+        return redirect("session_list")
+
+    target_message = get_object_or_404(
+        RequirementMessage.objects.filter(
+            session=chat_session,
+            role=RequirementMessage.ROLE_USER,
+        ),
+        id=message_id,
+    )
+    source_messages = list(
+        RequirementMessage.objects.filter(session=chat_session, id__lte=target_message.id).order_by("created_at")
+    )
+    if not source_messages:
+        messages.error(request, "未找到可提炼的聊天记录。")
+        return redirect("session_list")
+
+    summary_title = f"{SUMMARY_SESSION_TITLE_PREFIX}{_generate_session_title(target_message.content or '聊天片段')}"
+    summary_session = RequirementSession.objects.create(
+        title=summary_title,
+        content="__SUMMARY__",
+        created_by=request.user,
+        project=current_project,
+    )
+    for msg in source_messages:
+        RequirementMessage.objects.create(
+            session=summary_session,
+            role=msg.role,
+            content=msg.content,
+            attachment=msg.attachment,
+        )
+    messages.success(request, f"已提炼总结会话：{summary_session.title}")
+    return redirect("session_list")
 
 
 @login_required
@@ -2504,8 +4685,7 @@ def session_rollback(request, session_id, message_id):
 
     # 回退该用户消息以及其后的所有消息，保留会话壳与左侧列表项。
     RequirementMessage.objects.filter(session=active_session, id__gte=target_message.id).delete()
-    active_session.phase = RequirementSession.PHASE_COLLECTING
-    active_session.save(update_fields=["phase", "updated_at"])
+    active_session.save(update_fields=["updated_at"])
     _set_rollback_draft(request, active_session.id, rollback_draft)
     messages.success(request, "已回退到所选用户消息，可修改后重新发送。")
     return redirect("session_detail", session_id=active_session.id)
@@ -2517,6 +4697,9 @@ def session_delete(request, session_id):
     session = get_object_or_404(
         RequirementSession.objects.filter(created_by=request.user), id=session_id
     )
+    if _is_main_chat_session(session):
+        messages.error(request, "主聊天会话不允许删除。")
+        return redirect("session_list")
     session_title = session.title
     session.delete()
     messages.success(request, f"会话 '{session_title}' 已删除！")
@@ -2734,6 +4917,378 @@ def profile_settings(request):
     context = _build_chat_context(request)
     context.update({"current_nav": "settings_profile"})
     return render(request, "collector/profile_settings.html", context)
+
+
+@login_required
+def llm_api_config_list(request):
+    context = _build_chat_context(request)
+    items = list(LLMApiConfig.objects.filter(created_by=request.user).order_by("-updated_at", "name"))
+    for item in items:
+        item.masked_api_key = _mask_secret_value(item.api_key)
+    context.update(
+        {
+            "current_nav": "models_api",
+            "api_config_items": items,
+            "api_config_total": len(items),
+        }
+    )
+    return render(request, "collector/llm_api_config_list.html", context)
+
+
+@login_required
+def llm_api_config_create(request):
+    if request.method == "POST":
+        form = LLMApiConfigForm(request.POST)
+        if form.is_valid():
+            item = form.save(commit=False)
+            item.created_by = request.user
+            item.save()
+            messages.success(request, "大模型 API 配置已创建。")
+            return redirect("llm_api_config_list")
+    else:
+        form = LLMApiConfigForm()
+
+    context = _build_chat_context(request)
+    preset_items = _build_llm_api_presets_for_template()
+    context.update(
+        {
+            "current_nav": "models_api",
+            "llm_api_config_form": form,
+            "llm_api_page_title": "新增大模型 API 配置",
+            "llm_api_submit_text": "保存配置",
+            "llm_api_form_mode": "create",
+            "llm_api_presets": preset_items,
+        }
+    )
+    return render(request, "collector/llm_api_config_form.html", context)
+
+
+@login_required
+def llm_api_config_edit(request, config_id):
+    item = get_object_or_404(LLMApiConfig, id=config_id, created_by=request.user)
+    if request.method == "POST":
+        form = LLMApiConfigForm(request.POST, instance=item)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "大模型 API 配置已更新。")
+            return redirect("llm_api_config_list")
+    else:
+        form = LLMApiConfigForm(instance=item)
+
+    context = _build_chat_context(request)
+    preset_items = _build_llm_api_presets_for_template()
+    context.update(
+        {
+            "current_nav": "models_api",
+            "llm_api_config_form": form,
+            "llm_api_page_title": "编辑大模型 API 配置",
+            "llm_api_submit_text": "保存修改",
+            "llm_api_form_mode": "edit",
+            "llm_api_config_obj": item,
+            "llm_api_presets": preset_items,
+        }
+    )
+    return render(request, "collector/llm_api_config_form.html", context)
+
+
+@login_required
+def llm_api_config_delete(request, config_id):
+    if request.method != "POST":
+        return redirect("llm_api_config_list")
+    item = get_object_or_404(LLMApiConfig, id=config_id, created_by=request.user)
+    item.delete()
+    messages.success(request, "大模型 API 配置已删除。")
+    return redirect("llm_api_config_list")
+
+
+@login_required
+def local_llm_config_list(request):
+    _recover_interrupted_local_llm_tasks()
+    context = _build_chat_context(request)
+    items = list(LocalLLMConfig.objects.filter(created_by=request.user).order_by("-updated_at", "name"))
+
+    runtime_status = []
+    seen_endpoints = set()
+    endpoint_running_models = {}
+    endpoint_errors = {}
+    llama_cpp_health_ok, llama_cpp_health_error = _llama_cpp_runtime_health()
+    llama_cpp_running_models = _llama_cpp_running_models_snapshot()
+    for item in items:
+        if item.runtime_backend != LocalLLMConfig.BACKEND_OLLAMA:
+            continue
+        manager = OllamaRuntimeManager(endpoint=item.endpoint)
+        endpoint = manager.endpoint
+        if endpoint in seen_endpoints:
+            continue
+        seen_endpoints.add(endpoint)
+        start_ok, start_error = ensure_local_ollama_server(endpoint)
+        healthy, health_error = manager.health()
+        if not start_ok and health_error:
+            health_error = start_error or health_error
+        available_models, available_error = manager.list_models() if healthy else ([], health_error)
+        running_models, running_error = manager.list_running_models() if healthy else ([], health_error)
+        endpoint_running_models[endpoint] = running_models
+        endpoint_errors[endpoint] = available_error or running_error
+        runtime_status.append(
+            {
+                "endpoint": endpoint,
+                "healthy": healthy,
+                "error": available_error or running_error,
+                "available_models": available_models,
+                "running_models": running_models,
+            }
+        )
+    runtime_status.append(
+        {
+            "endpoint": "llama-cpp-python",
+            "healthy": llama_cpp_health_ok,
+            "error": llama_cpp_health_error,
+            "available_models": [],
+            "running_models": llama_cpp_running_models,
+        }
+    )
+
+    for item in items:
+        item.runtime_backend_label = dict(LocalLLMConfig.BACKEND_CHOICES).get(
+            item.runtime_backend,
+            item.runtime_backend,
+        )
+        item.masked_endpoint = str(item.endpoint or "").strip()
+        item.model_tag = str(item.model_name or "").strip()
+        state = _get_or_create_local_llm_runtime_state(item)
+        if item.runtime_backend == LocalLLMConfig.BACKEND_OLLAMA:
+            endpoint = OllamaRuntimeManager(endpoint=item.endpoint).endpoint
+            running_models = endpoint_running_models.get(endpoint, [])
+            runtime_error = endpoint_errors.get(endpoint)
+        else:
+            running_models = []
+            runtime_error = llama_cpp_health_error
+        state = _refresh_local_llm_state_by_runtime(item, state, running_models, runtime_error)
+        state_payload = _build_local_llm_runtime_state_payload(state)
+        item.runtime_state_payload = state_payload
+        item.runtime_status_label = state_payload["status_label"]
+        item.runtime_message = state_payload["last_message"]
+        item.runtime_error = state_payload["last_error"]
+        item.runtime_is_busy = state_payload["is_busy"]
+
+    context.update(
+        {
+            "current_nav": "models_local",
+            "local_llm_items": items,
+            "local_llm_total": len(items),
+            "local_llm_runtime_status": runtime_status,
+        }
+    )
+    return render(request, "collector/local_llm_config_list.html", context)
+
+
+@login_required
+def local_llm_config_create(request):
+    if request.method == "POST":
+        form = LocalLLMConfigForm(request.POST)
+        if form.is_valid():
+            item = form.save(commit=False)
+            item.created_by = request.user
+            item.save()
+            messages.success(request, "本地大模型配置已创建。")
+            return redirect("local_llm_config_list")
+    else:
+        form = LocalLLMConfigForm()
+
+    context = _build_chat_context(request)
+    local_preset_items = _build_local_llm_presets_for_template()
+    context.update(
+        {
+            "current_nav": "models_local",
+            "local_llm_config_form": form,
+            "local_llm_page_title": "新增本地大模型配置",
+            "local_llm_submit_text": "保存配置",
+            "local_llm_form_mode": "create",
+            "local_llm_presets": local_preset_items,
+        }
+    )
+    return render(request, "collector/local_llm_config_form.html", context)
+
+
+@login_required
+def local_llm_config_edit(request, config_id):
+    item = get_object_or_404(LocalLLMConfig, id=config_id, created_by=request.user)
+    if request.method == "POST":
+        form = LocalLLMConfigForm(request.POST, instance=item)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "本地大模型配置已更新。")
+            return redirect("local_llm_config_list")
+    else:
+        form = LocalLLMConfigForm(instance=item)
+
+    context = _build_chat_context(request)
+    local_preset_items = _build_local_llm_presets_for_template()
+    context.update(
+        {
+            "current_nav": "models_local",
+            "local_llm_config_form": form,
+            "local_llm_page_title": "编辑本地大模型配置",
+            "local_llm_submit_text": "保存修改",
+            "local_llm_form_mode": "edit",
+            "local_llm_config_obj": item,
+            "local_llm_presets": local_preset_items,
+        }
+    )
+    return render(request, "collector/local_llm_config_form.html", context)
+
+
+@login_required
+def local_llm_config_delete(request, config_id):
+    if request.method != "POST":
+        return redirect("local_llm_config_list")
+    item = get_object_or_404(LocalLLMConfig, id=config_id, created_by=request.user)
+    item.delete()
+    messages.success(request, "本地大模型配置已删除。")
+    return redirect("local_llm_config_list")
+
+
+@login_required
+def local_llm_runtime_action(request, config_id):
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "仅支持 POST 请求。"}, status=405)
+    _recover_interrupted_local_llm_tasks()
+    item = get_object_or_404(LocalLLMConfig, id=config_id, created_by=request.user)
+    raw_action = str(request.POST.get("action") or "").strip().lower()
+    action_alias = {
+        "pull": LocalLLMRuntimeTask.ACTION_ACTIVATE,
+        "warmup": LocalLLMRuntimeTask.ACTION_ACTIVATE,
+        "activate": LocalLLMRuntimeTask.ACTION_ACTIVATE,
+        "unload": LocalLLMRuntimeTask.ACTION_DEACTIVATE,
+        "deactivate": LocalLLMRuntimeTask.ACTION_DEACTIVATE,
+    }
+    action = action_alias.get(raw_action)
+    if action not in {LocalLLMRuntimeTask.ACTION_ACTIVATE, LocalLLMRuntimeTask.ACTION_DEACTIVATE}:
+        return JsonResponse({"success": False, "error": "不支持的运行操作。"}, status=400)
+
+    running_task = (
+        LocalLLMRuntimeTask.objects.filter(
+            config=item,
+            status__in=[LocalLLMRuntimeTask.STATUS_PENDING, LocalLLMRuntimeTask.STATUS_RUNNING],
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if running_task is not None:
+        state = _get_or_create_local_llm_runtime_state(item)
+        state_payload = _build_local_llm_runtime_state_payload(state)
+        return JsonResponse(
+            {
+                "success": False,
+                "error": "当前模型已有后台任务执行中，请稍后再试。",
+                "busy": True,
+                "config_id": item.id,
+                "runtime_state": state_payload,
+            },
+            status=409,
+        )
+
+    stage = (
+        LocalLLMRuntimeTask.STAGE_QUEUED
+        if action == LocalLLMRuntimeTask.ACTION_ACTIVATE
+        else LocalLLMRuntimeTask.STAGE_UNLOADING
+    )
+    detail_message = "任务已创建，等待执行。"
+    task = LocalLLMRuntimeTask.objects.create(
+        config=item,
+        created_by=request.user,
+        action=action,
+        status=LocalLLMRuntimeTask.STATUS_PENDING,
+        stage=stage,
+        detail_message=detail_message,
+    )
+    state = _get_or_create_local_llm_runtime_state(item)
+    state.is_busy = True
+    state.current_action = action
+    state.last_task = task
+    state.last_error = ""
+    if action == LocalLLMRuntimeTask.ACTION_ACTIVATE:
+        state.status = LocalLLMRuntimeState.STATUS_ACTIVATING
+        state.last_message = "正在激活模型"
+    else:
+        state.status = LocalLLMRuntimeState.STATUS_DEACTIVATING
+        state.last_message = "正在取消激活模型"
+    state.save(
+        update_fields=[
+            "is_busy",
+            "current_action",
+            "last_task",
+            "last_error",
+            "status",
+            "last_message",
+            "updated_at",
+        ]
+    )
+    _start_local_llm_runtime_task(task.id)
+    return JsonResponse(
+        {
+            "success": True,
+            "message": "后台任务已开始执行。",
+            "task_id": task.id,
+            "config_id": item.id,
+            "runtime_state": _build_local_llm_runtime_state_payload(state),
+        }
+    )
+
+
+@login_required
+def local_llm_runtime_status(request):
+    _recover_interrupted_local_llm_tasks()
+    items = list(LocalLLMConfig.objects.filter(created_by=request.user).order_by("-updated_at", "name"))
+    endpoint_running_models = {}
+    endpoint_errors = {}
+    _, llama_cpp_health_error = _llama_cpp_runtime_health()
+    for item in items:
+        if item.runtime_backend != LocalLLMConfig.BACKEND_OLLAMA:
+            continue
+        endpoint = OllamaRuntimeManager(endpoint=item.endpoint).endpoint
+        if endpoint in endpoint_running_models:
+            continue
+        start_ok, start_error = ensure_local_ollama_server(endpoint)
+        manager = OllamaRuntimeManager(endpoint=endpoint)
+        healthy, health_error = manager.health()
+        if not start_ok and health_error:
+            health_error = start_error or health_error
+        if healthy:
+            running_models, running_error = manager.list_running_models()
+            endpoint_running_models[endpoint] = running_models
+            endpoint_errors[endpoint] = running_error
+        else:
+            endpoint_running_models[endpoint] = []
+            endpoint_errors[endpoint] = health_error
+
+    payload_items = []
+    for item in items:
+        state = _get_or_create_local_llm_runtime_state(item)
+        if item.runtime_backend == LocalLLMConfig.BACKEND_OLLAMA:
+            endpoint = OllamaRuntimeManager(endpoint=item.endpoint).endpoint
+            running_models = endpoint_running_models.get(endpoint, [])
+            runtime_error = endpoint_errors.get(endpoint)
+        else:
+            running_models = []
+            runtime_error = llama_cpp_health_error
+        state = _refresh_local_llm_state_by_runtime(item, state, running_models, runtime_error)
+        payload = _build_local_llm_runtime_state_payload(state)
+        payload_items.append(
+            {
+                "config_id": item.id,
+                "config_name": item.name,
+                "model_name": item.model_name,
+                "runtime_backend": item.runtime_backend,
+                "runtime_backend_label": dict(LocalLLMConfig.BACKEND_CHOICES).get(
+                    item.runtime_backend,
+                    item.runtime_backend,
+                ),
+                **payload,
+            }
+        )
+
+    return JsonResponse({"success": True, "items": payload_items})
 
 
 # ==================== LLM 模型 API ====================

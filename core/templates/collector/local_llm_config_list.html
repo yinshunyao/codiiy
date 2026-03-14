@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+
+{% block title %}本地大模型配置{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-local-model {
+        grid-template-columns: 260px 1fr;
+    }
+    .local-model-item {
+        margin-bottom: 12px;
+    }
+    .runtime-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(280px, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+    }
+    .runtime-card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        background: var(--panel-2);
+    }
+    .runtime-list {
+        margin: 8px 0 0;
+        padding-left: 16px;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+
+<div class="app-shell app-shell-local-model">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">配置总数：{{ local_llm_total }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'local_llm_config_create' %}">+ 新增本地模型配置</a>
+                <a class="chip" href="{% url 'session_list' %}">返回对话页</a>
+            </div>
+        </div>
+
+        <section class="panel">
+            <div class="meta">本页面支持两种本地模型实现模式：Ollama 服务模式、Python 组件模式（llama-cpp-python）。</div>
+            {% if local_llm_runtime_status %}
+            <div class="runtime-grid">
+                {% for runtime in local_llm_runtime_status %}
+                <div class="runtime-card">
+                    <div><strong>{{ runtime.endpoint }}</strong></div>
+                    <div class="meta">
+                        服务状态：
+                        {% if runtime.healthy %}
+                        <span style="color: #84d8a7;">可用</span>
+                        {% else %}
+                        <span style="color: #ff8f8f;">不可用</span>
+                        {% endif %}
+                    </div>
+                    {% if runtime.error %}
+                    <div class="meta" style="color: #ff8f8f;">{{ runtime.error }}</div>
+                    {% endif %}
+                    <div class="meta" style="margin-top: 8px;">已安装模型：{{ runtime.available_models|length }}</div>
+                    <ul class="runtime-list">
+                        {% for model in runtime.available_models|slice:":8" %}
+                        <li>{{ model.name|default:model.model }}</li>
+                        {% empty %}
+                        <li>暂无</li>
+                        {% endfor %}
+                    </ul>
+                    <div class="meta" style="margin-top: 8px;">运行中模型：{{ runtime.running_models|length }}</div>
+                    <ul class="runtime-list">
+                        {% for model in runtime.running_models %}
+                        <li>{{ model.name|default:model.model }}</li>
+                        {% empty %}
+                        <li>暂无</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
+
+        <section class="conversation panel" style="margin-top: 12px;">
+            {% if local_llm_items %}
+                {% for item in local_llm_items %}
+                <div class="panel local-model-item">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+                        <div style="min-width: 0;">
+                            <div><strong>{{ item.name }}</strong>{% if not item.is_enabled %}<span class="meta">（已停用）</span>{% endif %}</div>
+                            <div class="meta">实现模式：{{ item.runtime_backend_label }}</div>
+                            {% if item.runtime_backend == "ollama" %}
+                            <div class="meta">Ollama地址：{{ item.masked_endpoint }}</div>
+                            {% else %}
+                            <div class="meta">模型文件：{{ item.model_file_path|default:"-" }}</div>
+                            <div class="meta">上下文窗口：{{ item.llama_cpp_n_ctx }}</div>
+                            {% endif %}
+                            <div class="meta">模型名称：{{ item.model_tag }}</div>
+                            <div class="meta">keep_alive：{{ item.keep_alive }}</div>
+                            <div class="meta">更新时间：{{ item.updated_at|date:"Y-m-d H:i" }}</div>
+                            <div class="meta">
+                                状态：
+                                <span id="runtime-status-label-{{ item.id }}">{{ item.runtime_status_label|default:"未激活" }}</span>
+                            </div>
+                            <div class="meta" id="runtime-status-message-{{ item.id }}">{{ item.runtime_message|default:"" }}</div>
+                            <div class="meta" id="runtime-status-error-{{ item.id }}" style="color: #ff8f8f;">{{ item.runtime_error|default:"" }}</div>
+                        </div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end;">
+                            <a class="chip" href="{% url 'local_llm_config_edit' item.id %}">编辑</a>
+                            <button
+                                type="button"
+                                class="chip js-runtime-action"
+                                data-config-id="{{ item.id }}"
+                                data-action="activate"
+                                data-runtime-url="{% url 'local_llm_runtime_action' item.id %}"
+                                {% if item.runtime_is_busy %}disabled{% endif %}
+                            >激活模型</button>
+                            <button
+                                type="button"
+                                class="chip js-runtime-action"
+                                data-config-id="{{ item.id }}"
+                                data-action="deactivate"
+                                data-runtime-url="{% url 'local_llm_runtime_action' item.id %}"
+                                {% if item.runtime_is_busy %}disabled{% endif %}
+                            >取消激活</button>
+                            <form method="post" action="{% url 'local_llm_config_delete' item.id %}" onsubmit="return confirm('确定删除该配置吗？');">
+                                {% csrf_token %}
+                                <button type="submit" class="chip">删除</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="panel">
+                    <div>当前没有本地大模型配置。</div>
+                    <div style="margin-top: 10px;">
+                        <a class="chip" href="{% url 'local_llm_config_create' %}">立即新增</a>
+                    </div>
+                </div>
+            {% endif %}
+        </section>
+    </main>
+</div>
+
+<script>
+    {% include "collector/partials/sidebar_menu_script.html" %}
+
+    (function () {
+        function getCookie(name) {
+            const cookieValue = document.cookie
+                .split(";")
+                .map(function (item) { return item.trim(); })
+                .find(function (item) { return item.startsWith(name + "="); });
+            if (!cookieValue) {
+                return "";
+            }
+            return decodeURIComponent(cookieValue.split("=").slice(1).join("="));
+        }
+
+        function applyRuntimeState(configId, stateItem) {
+            const labelEl = document.getElementById("runtime-status-label-" + configId);
+            const messageEl = document.getElementById("runtime-status-message-" + configId);
+            const errorEl = document.getElementById("runtime-status-error-" + configId);
+            if (labelEl) {
+                labelEl.textContent = stateItem.status_label || "未知";
+            }
+            if (messageEl) {
+                messageEl.textContent = stateItem.last_message || "";
+            }
+            if (errorEl) {
+                errorEl.textContent = stateItem.last_error || "";
+            }
+            const actionButtons = document.querySelectorAll('.js-runtime-action[data-config-id="' + configId + '"]');
+            actionButtons.forEach(function (button) {
+                button.disabled = Boolean(stateItem.is_busy);
+            });
+        }
+
+        async function refreshRuntimeStates() {
+            try {
+                const response = await fetch("{% url 'local_llm_runtime_status' %}", {
+                    method: "GET",
+                    headers: { "X-Requested-With": "XMLHttpRequest" },
+                    credentials: "same-origin"
+                });
+                if (!response.ok) {
+                    return;
+                }
+                const payload = await response.json();
+                if (!payload || !payload.success || !Array.isArray(payload.items)) {
+                    return;
+                }
+                payload.items.forEach(function (item) {
+                    applyRuntimeState(item.config_id, item);
+                });
+            } catch (error) {
+                // 网络抖动时忽略，下一轮轮询继续同步状态。
+            }
+        }
+
+        async function submitRuntimeAction(buttonEl) {
+            if (!buttonEl) {
+                return;
+            }
+            const configId = buttonEl.getAttribute("data-config-id");
+            const action = buttonEl.getAttribute("data-action");
+            const runtimeUrl = buttonEl.getAttribute("data-runtime-url");
+            if (!configId || !action || !runtimeUrl) {
+                return;
+            }
+            const relatedButtons = document.querySelectorAll('.js-runtime-action[data-config-id="' + configId + '"]');
+            relatedButtons.forEach(function (btn) { btn.disabled = true; });
+            try {
+                const body = new URLSearchParams({ action: action });
+                const response = await fetch(runtimeUrl, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                        "X-CSRFToken": getCookie("csrftoken"),
+                        "X-Requested-With": "XMLHttpRequest"
+                    },
+                    credentials: "same-origin",
+                    body: body.toString()
+                });
+                const payload = await response.json().catch(function () { return null; });
+                if (payload && payload.runtime_state) {
+                    applyRuntimeState(configId, payload.runtime_state);
+                } else {
+                    relatedButtons.forEach(function (btn) { btn.disabled = false; });
+                }
+            } catch (error) {
+                relatedButtons.forEach(function (btn) { btn.disabled = false; });
+            }
+        }
+
+        document.querySelectorAll(".js-runtime-action").forEach(function (button) {
+            button.addEventListener("click", function () {
+                submitRuntimeAction(button);
+            });
+        });
+
+        refreshRuntimeStates();
+        window.setInterval(refreshRuntimeStates, 1000);
+    })();
+</script>
+{% endblock %}

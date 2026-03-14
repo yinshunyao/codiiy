@@ -8,11 +8,31 @@
         </button>
         <div class="menu-section-body">
             <div class="menu-item-row">
-                <a class="menu-item-link menu-item-main {% if current_nav == 'chat' %}active{% endif %}" href="{% if primary_chat_session %}{% url 'session_detail' primary_chat_session.id %}{% else %}{% url 'session_list' %}{% endif %}">
+                <a class="menu-item-link menu-item-main {% if current_nav == 'chat' %}active{% endif %}" href="{% url 'session_list' %}">
                     聊天
-                    <div class="meta">当前对话 / 最近会话</div>
+                    <div class="meta">主聊天会话 / 全量记录</div>
                 </a>
-                <a class="menu-item-add-btn" href="{% url 'session_list' %}" title="新建对话" aria-label="新建对话">+</a>
+            </div>
+            <div class="friend-list">
+                {% for item in sidebar_companion_items %}
+                <a class="friend-item {% if current_companion_nav_id == item.obj.id %}active{% endif %}" href="{% url 'companion_chat' item.obj.id %}" title="{{ item.display_name_or_name }}">
+                    <span class="friend-avatar">{{ item.avatar_text }}</span>
+                    <span class="friend-main">
+                        <span class="friend-name">{{ item.display_name_or_name }}</span>
+                        <span class="friend-summary">{{ item.last_chat_summary }}</span>
+                    </span>
+                    <span class="friend-time">{% if item.last_chat_at %}{{ item.last_chat_at|date:"m-d H:i" }}{% endif %}</span>
+                </a>
+                {% empty %}
+                <div class="meta" style="padding: 4px 10px;">暂无伙伴，点击下方 + 创建</div>
+                {% endfor %}
+            </div>
+            <div class="menu-item-row">
+                <a class="menu-item-link menu-item-main {% if current_nav == 'companions' and not current_companion_nav_id %}active{% endif %}" href="{% url 'companion_list' %}">
+                    伙伴管理
+                    <div class="meta">通讯录总览 / 配置编辑</div>
+                </a>
+                <a class="menu-item-add-btn" href="{% url 'companion_create' %}" title="新增伙伴" aria-label="新增伙伴">+</a>
             </div>
         </div>
     </section>
@@ -31,16 +51,27 @@
         </div>
     </section>
 
-    <section class="menu-section is-open" data-menu-section>
+    <section class="menu-section {% if current_nav == 'toolset_list' or control_active_module %}is-open{% endif %}" data-menu-section>
         <button type="button" class="menu-section-toggle" data-menu-toggle>
             <span>工具组件</span>
-            <span class="menu-toggle-mark">-</span>
+            <span class="menu-toggle-mark">{% if current_nav == 'toolset_list' or control_active_module %}-{% else %}+{% endif %}</span>
         </button>
         <div class="menu-section-body">
             <a class="menu-item-link {% if current_nav == 'toolset_list' %}active{% endif %}" href="{% url 'toolset_list' %}">工具集</a>
             {% for module_key, module_label in control_modules.items %}
             <a class="menu-item-link {% if control_active_module == module_key %}active{% endif %}" href="{% url 'control_function_list' module_key %}">{{ module_label }}（{{ module_key }}）</a>
             {% endfor %}
+        </div>
+    </section>
+
+    <section class="menu-section {% if current_nav == 'models_api' or current_nav == 'models_local' %}is-open{% endif %}" data-menu-section>
+        <button type="button" class="menu-section-toggle" data-menu-toggle>
+            <span>模型</span>
+            <span class="menu-toggle-mark">{% if current_nav == 'models_api' or current_nav == 'models_local' %}-{% else %}+{% endif %}</span>
+        </button>
+        <div class="menu-section-body">
+            <a class="menu-item-link {% if current_nav == 'models_api' %}active{% endif %}" href="{% url 'llm_api_config_list' %}">大模型API</a>
+            <a class="menu-item-link {% if current_nav == 'models_local' %}active{% endif %}" href="{% url 'local_llm_config_list' %}">本地大模型</a>
         </div>
     </section>
 

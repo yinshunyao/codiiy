@@ -1,7 +1,7 @@
 import importlib
 from typing import Any, Dict, Optional
 
-from .component_manager import assert_function_enabled
+from .manager import assert_function_enabled
 
 
 def resolve_function(function_path: str):

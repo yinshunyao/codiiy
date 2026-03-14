@@ -1,0 +1,501 @@
+{% extends "base.html" %}
+
+{% block title %}{{ companion_page_title }}{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-companion-form {
+        grid-template-columns: 260px 1fr;
+    }
+    .app-shell-companion-form .main-panel {
+        overflow-y: auto;
+    }
+    .companion-form-layout {
+        display: block;
+    }
+    .companion-form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+    .companion-field-full {
+        grid-column: 1 / -1;
+    }
+    .companion-field-group label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 13px;
+        color: var(--muted);
+    }
+    .companion-field-group input[type="text"],
+    .companion-field-group textarea {
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .companion-module-box {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px 10px;
+        background: var(--panel-2);
+        max-height: 240px;
+        overflow-y: auto;
+    }
+    .companion-module-actions {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 8px;
+    }
+    .companion-module-actions .chip {
+        cursor: pointer;
+    }
+    .companion-module-box ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    .companion-module-box li {
+        margin-bottom: 4px;
+    }
+    .companion-module-box li label {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        margin: 0;
+        color: var(--text);
+        font-size: 13px;
+        line-height: 1.45;
+    }
+    .companion-llm-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        align-items: end;
+    }
+    .companion-llm-mode-row {
+        display: grid;
+        grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+        gap: 10px;
+        align-items: end;
+    }
+    .permission-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+    .permission-card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel-2);
+        padding: 10px;
+    }
+    .permission-card-full {
+        grid-column: 1 / -1;
+    }
+    .permission-card select[multiple] {
+        width: 100%;
+        min-height: 180px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px;
+    }
+    .permission-card option {
+        padding: 4px 6px;
+    }
+    @media (max-width: 1080px) {
+        .permission-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+
+<div class="app-shell app-shell-companion-form">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">{{ companion_page_title }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                {% if companion_form_mode == "edit" and companion_obj %}
+                <a class="chip" href="{% url 'companion_chat' companion_obj.id %}" target="_blank" rel="noopener">聊一聊</a>
+                <form method="post" style="display: inline-flex; margin: 0;">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="run_companion_knowledge_curation">
+                    <button type="submit" class="chip" style="border: 0;">执行知识库整理</button>
+                </form>
+                {% endif %}
+                <a class="chip" href="{% url 'companion_list' %}">返回伙伴列表</a>
+            </div>
+        </div>
+
+        <div class="companion-form-layout">
+            <section class="panel">
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="companion-form-grid">
+                        <div class="companion-field-group">
+                            <label for="{{ companion_form.name.id_for_label }}">伙伴标识</label>
+                            {{ companion_form.name }}
+                            {% if companion_form.name.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.name.errors|join:"；" }}</div>{% endif %}
+                        </div>
+                        <div class="companion-field-group">
+                            <label for="{{ companion_form.display_name.id_for_label }}">展示名称</label>
+                            {{ companion_form.display_name }}
+                            {% if companion_form.display_name.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.display_name.errors|join:"；" }}</div>{% endif %}
+                        </div>
+                        <div class="companion-field-group">
+                            <label for="{{ companion_form.role_title.id_for_label }}">角色名称</label>
+                            {{ companion_form.role_title }}
+                            {% if companion_form.role_title.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.role_title.errors|join:"；" }}</div>{% endif %}
+                        </div>
+                        <div class="companion-field-group">
+                            <label for="{{ companion_form.tone.id_for_label }}">回复语气</label>
+                            {{ companion_form.tone }}
+                            {% if companion_form.tone.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.tone.errors|join:"；" }}</div>{% endif %}
+                        </div>
+                        <div class="companion-field-group companion-field-full">
+                            <label for="{{ companion_form.persona.id_for_label }}">角色描述</label>
+                            {{ companion_form.persona }}
+                            {% if companion_form.persona.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.persona.errors|join:"；" }}</div>{% endif %}
+                        </div>
+                        <div class="companion-field-group companion-field-full">
+                            <label for="{{ companion_form.memory_notes.id_for_label }}">记忆摘要</label>
+                            {{ companion_form.memory_notes }}
+                            {% if companion_form.memory_notes.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.memory_notes.errors|join:"；" }}</div>{% endif %}
+                        </div>
+                        {{ companion_form.llm_api_config }}
+                        {{ companion_form.local_llm_config }}
+                        <div class="companion-field-group companion-field-full">
+                            <div class="companion-llm-mode-row">
+                                <div>
+                                    <label for="{{ companion_form.llm_routing_mode.id_for_label }}">模型模式</label>
+                                    {{ companion_form.llm_routing_mode }}
+                                    {% if companion_form.llm_routing_mode.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.llm_routing_mode.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                                <div class="meta" id="llm-mode-hint">自动模式下无需手动选择默认模型与备用模型。</div>
+                            </div>
+                        </div>
+                        <div class="companion-field-group companion-field-full">
+                            <div class="companion-llm-row">
+                                <div>
+                                    <label for="{{ companion_form.llm_source_type.id_for_label }}">一级：模型来源</label>
+                                    {{ companion_form.llm_source_type }}
+                                    {% if companion_form.llm_source_type.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.llm_source_type.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                                <div>
+                                    <label for="{{ companion_form.model_binding_key.id_for_label }}">二级：可用模型配置</label>
+                                    {{ companion_form.model_binding_key }}
+                                    {% if companion_form.model_binding_key.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.model_binding_key.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                                <div>
+                                    <label for="{{ companion_form.default_model_name.id_for_label }}">三级：默认模型与参数版本</label>
+                                    {{ companion_form.default_model_name }}
+                                    {% if companion_form.default_model_name.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.default_model_name.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                            </div>
+                            <div class="meta" id="default-model-hint" style="margin-top: 6px;">可选项随模型来源和配置联动刷新。</div>
+                        </div>
+                        <div class="companion-field-group companion-field-full">
+                            <label for="{{ companion_form.backup_models.id_for_label }}">备用模型（可多选，不能与默认模型重复）</label>
+                            {{ companion_form.backup_models }}
+                            <div class="meta" id="backup-model-hint">可在 API 与本地模型中混合选择备用模型。</div>
+                            {% if companion_form.backup_models.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.backup_models.errors|join:"；" }}</div>{% endif %}
+                        </div>
+                        <div class="companion-field-group companion-field-full">
+                            <label>知识库路径（系统自动生成）</label>
+                            <div class="meta" style="padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2);">
+                                {{ companion_knowledge_path_display|default:"data/companions/companion/knowledge" }}
+                            </div>
+                            <div class="meta" style="margin-top: 6px;">目录由系统自动维护，不支持手工修改。</div>
+                        </div>
+                        <div class="companion-field-group companion-field-full">
+                            <label>权限配置</label>
+                            <div class="permission-grid">
+                                <div class="permission-card">
+                                    <div class="companion-module-actions">
+                                        <button type="button" class="chip js-select-all" data-target="agent-modules-box">全选智能体</button>
+                                        <button type="button" class="chip js-clear-all" data-target="agent-modules-box">清空</button>
+                                    </div>
+                                    <div class="companion-module-box" id="agent-modules-box">{{ companion_form.allowed_agent_modules }}</div>
+                                    {% if companion_form.allowed_agent_modules.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.allowed_agent_modules.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                                <div class="permission-card">
+                                    <div class="companion-module-actions">
+                                        <button type="button" class="chip js-select-all" data-target="toolsets-box">全选工具集</button>
+                                        <button type="button" class="chip js-clear-all" data-target="toolsets-box">清空</button>
+                                    </div>
+                                    <div class="companion-module-box" id="toolsets-box">{{ companion_form.allowed_toolsets }}</div>
+                                    {% if companion_form.allowed_toolsets.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.allowed_toolsets.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                                <div class="permission-card">
+                                    <div class="companion-module-actions">
+                                        <button type="button" class="chip js-select-all" data-target="control-modules-box">全选组件模块</button>
+                                        <button type="button" class="chip js-clear-all" data-target="control-modules-box">清空</button>
+                                    </div>
+                                    <div class="companion-module-box" id="control-modules-box">{{ companion_form.allowed_control_modules }}</div>
+                                    {% if companion_form.allowed_control_modules.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.allowed_control_modules.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                                <div class="permission-card">
+                                    <div class="companion-module-actions">
+                                        <button type="button" class="chip js-select-all-options" data-target="id_allowed_control_components">全选组件</button>
+                                        <button type="button" class="chip js-clear-all-options" data-target="id_allowed_control_components">清空</button>
+                                    </div>
+                                    {{ companion_form.allowed_control_components }}
+                                    <div class="meta" style="margin-top: 6px;">可选留空；配置后仅允许命中的组件。</div>
+                                    {% if companion_form.allowed_control_components.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.allowed_control_components.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                                <div class="permission-card permission-card-full">
+                                    <div class="companion-module-actions">
+                                        <button type="button" class="chip js-select-all-options" data-target="id_allowed_control_functions">全选 API</button>
+                                        <button type="button" class="chip js-clear-all-options" data-target="id_allowed_control_functions">清空</button>
+                                    </div>
+                                    {{ companion_form.allowed_control_functions }}
+                                    <div class="meta" style="margin-top: 6px;">可选留空；配置后仅允许命中的 API。</div>
+                                    {% if companion_form.allowed_control_functions.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.allowed_control_functions.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="companion-field-group companion-field-full">
+                            <label for="{{ companion_form.is_active.id_for_label }}">{{ companion_form.is_active }} 启用伙伴</label>
+                        </div>
+                    </div>
+                    <div style="margin-top: 12px;">
+                        <button type="submit">{{ companion_submit_text }}</button>
+                    </div>
+                </form>
+            </section>
+        </div>
+    </main>
+</div>
+
+<script>
+    (function bindCompanionModuleActions() {
+        const selectButtons = document.querySelectorAll(".js-select-all");
+        const clearButtons = document.querySelectorAll(".js-clear-all");
+
+        const setCheckboxGroupChecked = function (targetId, checked) {
+            if (!targetId) {
+                return;
+            }
+            const box = document.getElementById(targetId);
+            if (!box) {
+                return;
+            }
+            const checkboxes = box.querySelectorAll("input[type='checkbox']");
+            checkboxes.forEach((item) => {
+                item.checked = checked;
+            });
+        };
+
+        selectButtons.forEach((button) => {
+            button.addEventListener("click", function () {
+                setCheckboxGroupChecked(button.getAttribute("data-target"), true);
+            });
+        });
+
+        clearButtons.forEach((button) => {
+            button.addEventListener("click", function () {
+                setCheckboxGroupChecked(button.getAttribute("data-target"), false);
+            });
+        });
+
+        const selectOptionButtons = document.querySelectorAll(".js-select-all-options");
+        const clearOptionButtons = document.querySelectorAll(".js-clear-all-options");
+        const setSelectOptions = function (targetId, selected) {
+            const select = document.getElementById(targetId || "");
+            if (!select) {
+                return;
+            }
+            Array.from(select.options || []).forEach((option) => {
+                option.selected = selected;
+            });
+        };
+        selectOptionButtons.forEach((button) => {
+            button.addEventListener("click", function () {
+                setSelectOptions(button.getAttribute("data-target"), true);
+            });
+        });
+        clearOptionButtons.forEach((button) => {
+            button.addEventListener("click", function () {
+                setSelectOptions(button.getAttribute("data-target"), false);
+            });
+        });
+    })();
+
+    (function bindCompanionLlmSource() {
+        const routingModeSelect = document.getElementById("id_llm_routing_mode");
+        const sourceSelect = document.getElementById("id_llm_source_type");
+        const bindingSelect = document.getElementById("id_model_binding_key");
+        const hiddenApiSelect = document.getElementById("id_llm_api_config");
+        const hiddenLocalSelect = document.getElementById("id_local_llm_config");
+        const defaultModelSelect = document.getElementById("id_default_model_name");
+        const defaultModelHint = document.getElementById("default-model-hint");
+        const backupModelSelect = document.getElementById("id_backup_models");
+        const backupModelHint = document.getElementById("backup-model-hint");
+        const modeHint = document.getElementById("llm-mode-hint");
+        if (!routingModeSelect || !sourceSelect || !bindingSelect || !defaultModelSelect || !backupModelSelect || !hiddenApiSelect || !hiddenLocalSelect) {
+            return;
+        }
+
+        const parseMap = function (value) {
+            if (!value) {
+                return {};
+            }
+            try {
+                return JSON.parse(value);
+            } catch (error) {
+                return {};
+            }
+        };
+        const modelOptionsMap = parseMap(defaultModelSelect.getAttribute("data-model-options-map"));
+
+        const parseBindingKey = function (value) {
+            const raw = String(value || "");
+            const parts = raw.split("|");
+            if (parts.length !== 2) {
+                return { source: "", configId: "" };
+            }
+            return { source: parts[0] || "", configId: parts[1] || "" };
+        };
+
+        const rebuildBindingOptions = function (source) {
+            const previousValue = bindingSelect.value || "";
+            const allOptions = Array.from(bindingSelect.options || []);
+            allOptions.forEach((option) => {
+                if (!option.value) {
+                    option.hidden = false;
+                    return;
+                }
+                const parsed = parseBindingKey(option.value);
+                option.hidden = parsed.source !== source;
+            });
+            const visibleValues = allOptions.filter((option) => !option.hidden).map((option) => option.value);
+            if (!visibleValues.includes(previousValue)) {
+                bindingSelect.value = "";
+            }
+        };
+
+        const rebuildDefaultModelOptions = function () {
+            const source = sourceSelect.value || "api";
+            const bindingKey = bindingSelect.value || "";
+            const modelOptions = modelOptionsMap[bindingKey] || [];
+            const previousValue = defaultModelSelect.value || "";
+
+            while (defaultModelSelect.options.length > 0) {
+                defaultModelSelect.remove(0);
+            }
+            defaultModelSelect.add(new Option("不设置", ""));
+            modelOptions.forEach((item) => {
+                if (!Array.isArray(item) || item.length < 1) {
+                    return;
+                }
+                const modelValue = item[0] || "";
+                const modelLabel = item[1] || modelValue;
+                if (!modelValue) {
+                    return;
+                }
+                defaultModelSelect.add(new Option(modelLabel, modelValue));
+            });
+
+            const exists = Array.from(defaultModelSelect.options).some((option) => option.value === previousValue);
+            if (exists) {
+                defaultModelSelect.value = previousValue;
+            } else {
+                defaultModelSelect.value = "";
+            }
+
+            if (defaultModelHint) {
+                if (!bindingKey) {
+                    defaultModelHint.textContent = "请先选择模型配置，再选择默认模型。";
+                } else if (modelOptions.length === 0) {
+                    defaultModelHint.textContent = "当前配置暂无可选模型，请检查配置项。";
+                } else if (!exists && previousValue) {
+                    defaultModelHint.textContent = "原默认模型不在当前候选集中，已自动清空，请重新选择。";
+                } else {
+                    defaultModelHint.textContent = "可选项随模型来源和绑定配置联动刷新。";
+                }
+            }
+
+            const parsed = parseBindingKey(bindingKey);
+            hiddenApiSelect.value = source === "api" ? parsed.configId : "";
+            hiddenLocalSelect.value = source === "local" ? parsed.configId : "";
+        };
+
+        const syncBackupModelState = function () {
+            const source = sourceSelect.value || "api";
+            const bindingKey = bindingSelect.value || "";
+            const defaultModelName = defaultModelSelect.value || "";
+            const parsed = parseBindingKey(bindingKey);
+            const defaultToken = defaultModelName ? `${source}|${parsed.configId}|${defaultModelName}` : "";
+            let removedDefaultToken = false;
+            Array.from(backupModelSelect.options || []).forEach((option) => {
+                if (!defaultToken) {
+                    option.disabled = false;
+                    return;
+                }
+                const shouldDisable = option.value === defaultToken;
+                option.disabled = shouldDisable;
+                if (shouldDisable && option.selected) {
+                    option.selected = false;
+                    removedDefaultToken = true;
+                }
+            });
+            if (backupModelHint) {
+                backupModelHint.textContent = removedDefaultToken
+                    ? "检测到与默认模型重复的备用项，已自动取消选择。"
+                    : "可在 API 与本地模型中混合选择备用模型。";
+            }
+        };
+
+        const sync = function () {
+            const routingMode = routingModeSelect.value || "manual";
+            const source = sourceSelect.value || "api";
+            const isAuto = routingMode === "auto";
+            sourceSelect.disabled = isAuto;
+            bindingSelect.disabled = isAuto;
+            defaultModelSelect.disabled = isAuto;
+            backupModelSelect.disabled = isAuto;
+            if (modeHint) {
+                modeHint.textContent = isAuto
+                    ? "当前为自动模式，系统自动决策模型，无需手动配置。"
+                    : "当前为手动模式，请按一级/二级/三级完成模型选择。";
+            }
+            if (isAuto) {
+                hiddenApiSelect.value = "";
+                hiddenLocalSelect.value = "";
+                defaultModelSelect.value = "";
+                Array.from(backupModelSelect.options || []).forEach((item) => {
+                    item.selected = false;
+                    item.disabled = false;
+                });
+                if (defaultModelHint) {
+                    defaultModelHint.textContent = "自动模式已启用，手动模型选择已忽略。";
+                }
+                if (backupModelHint) {
+                    backupModelHint.textContent = "自动模式已启用，备用模型配置已忽略。";
+                }
+                return;
+            }
+            rebuildBindingOptions(source);
+            rebuildDefaultModelOptions();
+            syncBackupModelState();
+        };
+        routingModeSelect.addEventListener("change", sync);
+        sourceSelect.addEventListener("change", sync);
+        bindingSelect.addEventListener("change", sync);
+        defaultModelSelect.addEventListener("change", syncBackupModelState);
+        sync();
+    })();
+
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}
