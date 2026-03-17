@@ -10,3 +10,4 @@ __pycache__
 /.idea/vcs.xml
 /.idea/.gitignore
 /.idea/codiiy.iml
+/core/.cursor-cli/sessions.db

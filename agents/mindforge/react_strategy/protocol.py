@@ -70,3 +70,4 @@ def extract_text_from_model_output(data: Any) -> str:
                 return merged
 
     return safe_json_dumps(data)
+

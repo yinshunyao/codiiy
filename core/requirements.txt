@@ -3,3 +3,5 @@ dashscope
 zvec
 numpy
 llama-cpp-python
+markdown
+bleach

@@ -8,6 +8,12 @@ from .file_reader_component import (
     search_keyword,
     search_regex,
 )
+from .file_writer_component import (
+    append_file,
+    create_file,
+    replace_file_text,
+    write_file,
+)
 from .mouse_action_component import (
     get_mouse_position,
     mouse_click,
@@ -35,6 +41,10 @@ __all__ = [
     "search_regex",
     "get_file_stats",
     "get_system_info",
+    "create_file",
+    "write_file",
+    "append_file",
+    "replace_file_text",
     "mouse_click",
     "mouse_double_click",
     "mouse_move",

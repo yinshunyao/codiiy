@@ -19,6 +19,7 @@
 - 关键 API：
   - `create_terminal_object(cwd="", shell_mode="zsh")`
   - `input_output(object_id, command, timeout_seconds=30.0, read_incremental_output=False)`
+  - `run_command(command, cwd="", shell_mode="zsh", timeout_seconds=30.0)`（一次性执行，自动创建/关闭会话）
   - `read_output(object_id, offset=None, update_offset=True)`
   - `close_terminal_object(object_id)`
   - `list_terminal_objects()`

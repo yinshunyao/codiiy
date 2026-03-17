@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load chat_render %}
 
 {% block title %}{% if is_companion_chat and companion_chat %}{{ companion_chat.display_name|default:companion_chat.name }}{% else %}会话列表{% endif %}{% endblock %}
 
@@ -234,10 +235,90 @@
         font-size: 12px;
         line-height: 1.35;
     }
+    .interaction-card {
+        margin-top: 8px;
+        border: 1px dashed var(--line);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.04);
+        padding: 10px;
+    }
+    .interaction-card h4 {
+        margin: 0 0 6px;
+        font-size: 13px;
+    }
+    .interaction-card .meta {
+        margin-bottom: 8px;
+    }
+    .interaction-card select,
+    .interaction-card input[type="text"],
+    .interaction-card input[type="password"] {
+        width: 100%;
+        min-height: 34px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        padding: 6px 8px;
+        margin-bottom: 8px;
+    }
+    .interaction-card .chip {
+        margin-right: 8px;
+    }
+    .interaction-card .interaction-tip {
+        margin: 0 0 8px;
+        color: var(--muted);
+        font-size: 12px;
+    }
     .token-usage-meta {
         margin-left: 8px;
         color: var(--muted);
         font-size: 12px;
+    }
+    .message-text p {
+        margin: 0 0 0.55em;
+    }
+    .message-text p:last-child {
+        margin-bottom: 0;
+    }
+    .message-text ul,
+    .message-text ol {
+        margin: 0.35em 0 0.65em 1.2em;
+        padding: 0;
+    }
+    .message-text code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 12px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.08);
+        padding: 0.08em 0.35em;
+    }
+    .message-text pre {
+        margin: 0.45em 0 0.65em;
+        padding: 9px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.16);
+        overflow-x: auto;
+    }
+    .message-text pre code {
+        background: transparent;
+        padding: 0;
+    }
+    .message-text a {
+        color: #8ec2ff;
+        text-decoration: underline;
+    }
+    .message-text table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0.4em 0 0.65em;
+        font-size: 12px;
+    }
+    .message-text th,
+    .message-text td {
+        border: 1px solid var(--line);
+        padding: 6px 8px;
+        text-align: left;
     }
     @media (max-width: 1200px) {
         .chat-main-layout {
@@ -259,6 +340,21 @@
     <main class="main-panel">
         <div class="top-actions">
             <div class="top-actions-left">
+                {% if is_companion_chat %}
+                <label class="chip" for="mindforgeStrategySelect" style="display: inline-flex; align-items: center; gap: 6px;">
+                    <span>心法模式</span>
+                    <select
+                        id="mindforgeStrategySelect"
+                        data-set-url="{{ companion_mindforge_strategy_set_url }}"
+                        data-csrf-token="{{ csrf_token }}"
+                        style="background: transparent; color: inherit; border: 1px solid var(--border); border-radius: 8px; padding: 2px 6px;"
+                    >
+                        {% for item in companion_mindforge_strategy_options %}
+                        <option value="{{ item.key }}" {% if item.key == companion_mindforge_strategy %}selected{% endif %}>{{ item.label }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                {% endif %}
                 {% if show_llm_selector %}
                 <div class="custom-dropdown" id="llmDropdown" data-project-id="{{ current_project.id }}" data-csrf-token="{{ csrf_token }}">
                     <button type="button" class="chip llm-chip-btn" id="llmDropdownToggle" style="padding: 4px 8px;">
@@ -291,7 +387,12 @@
         </div>
 
         <div class="chat-main-layout" id="chatMainLayout">
-            <section class="conversation" id="conversationBox" data-has-active-session="{% if active_session %}1{% else %}0{% endif %}">
+            <section
+                class="conversation"
+                id="conversationBox"
+                data-has-active-session="{% if active_session %}1{% else %}0{% endif %}"
+                data-active-session-id="{% if active_session %}{{ active_session.id }}{% else %}0{% endif %}"
+            >
                 <div class="chat-track">
                     {% if active_session %}
                     <div class="panel" style="margin-bottom: 2px;">
@@ -299,10 +400,10 @@
                         <div class="meta">创建时间：{{ active_session.created_at|date:"Y-m-d H:i" }}</div>
                     </div>
                     {% for message in messages %}
-                    <div class="message-row {% if message.role == 'user' %}user{% else %}assistant{% endif %}">
+                    <div class="message-row {% if message.role == 'user' %}user{% else %}assistant{% endif %}" data-message-id="{{ message.id }}">
                         <div class="bubble {% if message.role == 'user' %}bubble-user{% else %}bubble-assistant{% endif %}">
                             <div class="meta" style="margin-top: 0;">
-                                {% if message.role == "user" %}你{% elif is_companion_chat and companion_chat %}{{ companion_chat.display_name|default:companion_chat.name }}{% else %}助手{% endif %} · {{ message.created_at|date:"H:i:s" }}
+                                <span data-message-role-label="1">{% if message.role == "user" %}你{% else %}{{ message.responder_name|default:"助手" }}{% endif %}</span> · <span data-message-created-at="1">{{ message.created_at|date:"H:i:s" }}</span>
                                 {% if message.role == "assistant" %}
                                     {% if message.token_usage %}
                                     <span class="token-usage-meta">Token: 输入 {{ message.token_usage.prompt_tokens|default:0 }} / 输出 {{ message.token_usage.completion_tokens|default:0 }} / 总计 {{ message.token_usage.total_tokens|default:0 }}</span>
@@ -311,8 +412,8 @@
                                     {% endif %}
                                 {% endif %}
                             </div>
-                            {% if message.role == "assistant" and message.process_trace_events %}
-                            <div class="process-trace-wrap">
+                            {% if message.role == "assistant" %}
+                            <div class="process-trace-wrap" {% if not message.process_trace_events %}style="display: none;"{% endif %}>
                                 {% for event in message.process_trace_events %}
                                 <details class="process-trace-step">
                                     <summary>
@@ -357,6 +458,7 @@
                                 </details>
                                 {% endfor %}
                             </div>
+                            <div data-interaction-container="1"></div>
                             {% endif %}
                             <div class="message-text">
                                 {% if message.attachment %}
@@ -370,12 +472,14 @@
                                 {% endif %}
 
                                 {% if message.content %}
+                                    <div data-message-content="1">
                                     {% if message.is_audio_attachment %}
                                     <div class="voice-transcript-wrap">
                                         <button type="button" class="chip llm-chip-btn transcript-toggle-btn" data-target-id="transcript-{{ message.id }}">展开文字</button>
                                         <div class="voice-transcript-text is-collapsed" id="transcript-{{ message.id }}">{{ message.content|linebreaksbr }}</div>
                                     </div>
-                                    {% else %}{{ message.content|linebreaksbr }}{% endif %}
+                                    {% else %}{{ message.content|render_chat_content }}{% endif %}
+                                    </div>
                                 {% endif %}
                             </div>
                             {% if message.role == "user" and active_session and not is_summary_view %}
@@ -465,10 +569,16 @@
                 data-async-send-url="{% if chat_session %}{% url 'session_send_async' chat_session.id %}{% endif %}"
                 data-task-status-url-template="{% if chat_session %}{% url 'chat_reply_task_status' chat_session.id 0 %}{% endif %}"
                 data-task-stop-url-template="{% if chat_session %}{% url 'chat_reply_task_stop' chat_session.id 0 %}{% endif %}"
+                data-task-interaction-submit-url-template="{% if chat_session %}{% url 'chat_reply_task_interaction_submit' chat_session.id 0 %}{% endif %}"
+                data-inflight-task-id="{{ inflight_reply_task_id|default:0 }}"
+                data-inflight-assistant-message-id="{{ inflight_reply_assistant_message_id|default:0 }}"
                 data-readonly="{% if is_summary_view %}1{% else %}0{% endif %}"
                 enctype="multipart/form-data"
             >
                 {% csrf_token %}
+                {% if is_companion_chat %}
+                <input type="hidden" name="mindforge_strategy" id="id_mindforge_strategy" value="{{ companion_mindforge_strategy }}">
+                {% endif %}
                 <div class="chat-input-shell">
                     <button type="button" id="attachmentTrigger" class="input-icon-btn plus-btn" title="上传附件" aria-label="上传附件">+</button>
                     <div class="chat-input-main">
@@ -506,23 +616,33 @@
 {{ enabled_companions|json_script:"enabledCompanionsData" }}
 <script>
     (function () {
-        const conversationBox = document.getElementById("conversationBox");
-        if (!conversationBox) {
-            return;
-        }
-
-        if (conversationBox.dataset.hasActiveSession !== "1") {
-            return;
-        }
-
-        const scrollToLatest = () => {
-            conversationBox.scrollTop = conversationBox.scrollHeight;
-        };
-
-        requestAnimationFrame(() => {
-            scrollToLatest();
-            requestAnimationFrame(scrollToLatest);
-        });
+        window.chatUiStateStore = (function () {
+            const conversationBox = document.getElementById("conversationBox");
+            const sessionId = conversationBox ? String(conversationBox.dataset.activeSessionId || "0") : "0";
+            const storageKey = `chat_ui_state:${window.location.pathname}:session:${sessionId}`;
+            const readState = function () {
+                try {
+                    const raw = localStorage.getItem(storageKey);
+                    if (!raw) {
+                        return {};
+                    }
+                    const parsed = JSON.parse(raw);
+                    return parsed && typeof parsed === "object" ? parsed : {};
+                } catch (error) {
+                    return {};
+                }
+            };
+            const writeState = function (patch) {
+                const nextState = Object.assign({}, readState(), patch || {});
+                try {
+                    localStorage.setItem(storageKey, JSON.stringify(nextState));
+                } catch (error) {
+                    // 忽略本地存储失败，避免影响聊天主流程
+                }
+                return nextState;
+            };
+            return { readState, writeState };
+        })();
     })();
 
     (function () {
@@ -536,15 +656,21 @@
             return;
         }
 
+        const stateStore = window.chatUiStateStore;
+        const readUiState = stateStore && typeof stateStore.readState === "function" ? stateStore.readState : function () { return {}; };
+        const writeUiState = stateStore && typeof stateStore.writeState === "function" ? stateStore.writeState : function () {};
+
         const setDrawerOpen = function (isOpen) {
             const open = Boolean(isOpen);
             layout.classList.toggle("summary-drawer-open", open);
             toggleButton.setAttribute("aria-expanded", open ? "true" : "false");
             drawer.setAttribute("aria-hidden", open ? "false" : "true");
             toggleButton.textContent = open ? "收起总结会话" : "展开总结会话";
+            writeUiState({ summaryDrawerOpen: open });
         };
 
-        setDrawerOpen(false);
+        const savedUiState = readUiState();
+        setDrawerOpen(Boolean(savedUiState.summaryDrawerOpen));
 
         toggleButton.addEventListener("click", function () {
             const nextOpen = toggleButton.getAttribute("aria-expanded") !== "true";
@@ -583,19 +709,28 @@
         }
 
         const submitButton = form.querySelector("button[type='submit']");
+        const strategySelect = document.getElementById("mindforgeStrategySelect");
+        const strategyHiddenInput = document.getElementById("id_mindforge_strategy");
         const fileInput = document.getElementById("id_attachment");
         const attachmentTrigger = document.getElementById("attachmentTrigger");
         const attachmentInfo = document.getElementById("selectedAttachmentInfo");
+        const recordStatus = document.getElementById("voiceRecordStatus");
         const speechBtn = document.getElementById("speechRecognizeBtn");
         const mentionSuggestionBox = document.getElementById("mentionSuggestionBox");
         const conversationBox = document.getElementById("conversationBox");
         const enabledCompanionsDataElement = document.getElementById("enabledCompanionsData");
         const enabledCompanions = enabledCompanionsDataElement ? JSON.parse(enabledCompanionsDataElement.textContent) : [];
         const conversationTrack = document.querySelector(".chat-track");
-        const asyncSendUrl = form.dataset.asyncSendUrl || "";
-        const taskStatusUrlTemplate = form.dataset.taskStatusUrlTemplate || "";
-        const taskStopUrlTemplate = form.dataset.taskStopUrlTemplate || "";
+        const rawAsyncSendUrl = form.dataset.asyncSendUrl || "";
+        const rawTaskStatusUrlTemplate = form.dataset.taskStatusUrlTemplate || "";
+        const rawTaskStopUrlTemplate = form.dataset.taskStopUrlTemplate || "";
+        const rawTaskInteractionSubmitUrlTemplate = form.dataset.taskInteractionSubmitUrlTemplate || "";
+        const inflightTaskId = Number(form.dataset.inflightTaskId || "0");
+        const inflightAssistantMessageId = Number(form.dataset.inflightAssistantMessageId || "0");
         const isReadonlyView = form.dataset.readonly === "1";
+        const stateStore = window.chatUiStateStore;
+        const readUiState = stateStore && typeof stateStore.readState === "function" ? stateStore.readState : function () { return {}; };
+        const writeUiState = stateStore && typeof stateStore.writeState === "function" ? stateStore.writeState : function () {};
         let mentionCandidates = [];
         let mentionActiveIndex = 0;
         let mentionAnchorIndex = -1;
@@ -604,13 +739,120 @@
         let pollingTimer = null;
         let currentAssistantMessageRefs = null;
         let isAwaitingReply = false;
+        let autoFollowBottom = true;
+        let lastPolledAssistantContent = "";
+        let stagnantPollRounds = 0;
+        const setRecordStatus = function (text) {
+            if (recordStatus) {
+                recordStatus.textContent = text;
+            }
+        };
+        const defaultRecordStatusText = recordStatus ? String(recordStatus.textContent || "未开始语音输入") : "未开始语音输入";
 
-        const getTaskUrl = function (template, taskId) {
-            if (!template || !taskId) {
+        const isNearBottom = function () {
+            if (!conversationBox) {
+                return true;
+            }
+            const remain = conversationBox.scrollHeight - conversationBox.clientHeight - conversationBox.scrollTop;
+            return remain <= 36;
+        };
+
+        const initializeScrollState = function () {
+            const savedUiState = readUiState();
+            const savedAutoFollow = savedUiState.autoFollowBottom;
+            autoFollowBottom = savedAutoFollow !== false;
+            const savedScrollTop = Number(savedUiState.scrollTop);
+            if (conversationBox && conversationBox.dataset.hasActiveSession === "1") {
+                if (!autoFollowBottom && Number.isFinite(savedScrollTop) && savedScrollTop >= 0) {
+                    conversationBox.scrollTop = savedScrollTop;
+                } else {
+                    conversationBox.scrollTop = conversationBox.scrollHeight;
+                }
+            }
+        };
+
+        initializeScrollState();
+
+        if (conversationBox) {
+            conversationBox.addEventListener("scroll", function () {
+                autoFollowBottom = isNearBottom();
+                writeUiState({
+                    autoFollowBottom: autoFollowBottom,
+                    scrollTop: conversationBox.scrollTop,
+                });
+            });
+        }
+
+        if (strategySelect && strategyHiddenInput) {
+            strategyHiddenInput.value = strategySelect.value || "auto";
+            strategySelect.addEventListener("change", function () {
+                const selected = String(strategySelect.value || "auto").trim() || "auto";
+                strategyHiddenInput.value = selected;
+                const setUrl = String(strategySelect.dataset.setUrl || "").trim();
+                const csrfToken = String(strategySelect.dataset.csrfToken || "").trim();
+                if (!setUrl || !csrfToken) {
+                    return;
+                }
+                const data = new FormData();
+                data.append("csrfmiddlewaretoken", csrfToken);
+                data.append("mindforge_strategy", selected);
+                fetch(setUrl, { method: "POST", body: data })
+                    .then((response) => response.json())
+                    .then((payload) => {
+                        if (!payload || payload.success !== true) {
+                            throw new Error((payload && payload.error) || "心法模式更新失败");
+                        }
+                        strategyHiddenInput.value = payload.mindforge_strategy || selected;
+                    })
+                    .catch((error) => {
+                        setRecordStatus(error && error.message ? error.message : "心法模式更新失败");
+                    });
+            });
+        }
+
+        const extractSessionId = function () {
+            const candidates = [
+                String(rawAsyncSendUrl || "").trim(),
+                String(form.getAttribute("action") || "").trim(),
+                String(rawTaskStatusUrlTemplate || "").trim(),
+            ];
+            for (let index = 0; index < candidates.length; index += 1) {
+                const candidate = candidates[index];
+                if (!candidate) {
+                    continue;
+                }
+                const match = candidate.match(/\/sessions\/(\d+)\//);
+                if (match && match[1]) {
+                    return Number(match[1]);
+                }
+            }
+            return 0;
+        };
+        const currentSessionId = extractSessionId();
+        const buildTaskUrlByKind = function (taskId, kind) {
+            const normalizedTaskId = Number(taskId || 0);
+            if (!currentSessionId || !normalizedTaskId || !kind) {
                 return "";
             }
-            return template.replace("/0/", `/${taskId}/`);
+            return `/sessions/${currentSessionId}/reply-task/${normalizedTaskId}/${kind}/`;
         };
+        const getTaskUrl = function (template, taskId, fallbackKind) {
+            const normalizedTaskId = Number(taskId || 0);
+            if (!normalizedTaskId) {
+                return "";
+            }
+            const normalizedTemplate = String(template || "").trim();
+            if (normalizedTemplate && normalizedTemplate.includes("/0/")) {
+                return normalizedTemplate.replace("/0/", `/${normalizedTaskId}/`);
+            }
+            return buildTaskUrlByKind(normalizedTaskId, fallbackKind);
+        };
+        const asyncSendUrl = String(rawAsyncSendUrl || "").trim() || (
+            currentSessionId ? `/sessions/${currentSessionId}/send-async/` : ""
+        );
+        const taskStatusUrlTemplate = String(rawTaskStatusUrlTemplate || "").trim();
+        const taskStopUrlTemplate = String(rawTaskStopUrlTemplate || "").trim();
+        const taskInteractionSubmitUrlTemplate = String(rawTaskInteractionSubmitUrlTemplate || "").trim();
 
         const toHtml = function (text) {
             const escaped = String(text || "")
@@ -618,6 +860,13 @@
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;");
             return escaped.replace(/\n/g, "<br>");
+        };
+
+        const renderMessageHtml = function (text, contentHtml) {
+            if (typeof contentHtml === "string" && contentHtml.trim()) {
+                return contentHtml;
+            }
+            return toHtml(text || "");
         };
 
         const normalizeTokenUsage = function (rawUsage) {
@@ -657,6 +906,23 @@
             return `Token: 输入 ${usage.prompt_tokens} / 输出 ${usage.completion_tokens} / 总计 ${usage.total_tokens}`;
         };
 
+        const buildTaskStatusHintText = function (statusData) {
+            if (!statusData || !["pending", "running"].includes(String(statusData.status || ""))) {
+                return "";
+            }
+            const explicitHint = String(statusData.status_hint || "").trim();
+            if (explicitHint) {
+                return explicitHint;
+            }
+            const runtime = statusData.runtime_status && typeof statusData.runtime_status === "object"
+                ? statusData.runtime_status
+                : {};
+            const stageLabel = String(runtime.stage_label || "").trim() || "任务执行中";
+            const elapsedMs = Number(runtime.elapsed_ms || 0);
+            const elapsedSeconds = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs / 1000) : 0;
+            return `${stageLabel}（已运行 ${elapsedSeconds.toFixed(1)}s）`;
+        };
+
         const formatEventKindLabel = function (kind) {
             const normalized = String(kind || "").trim();
             if (normalized === "llm_call") {
@@ -686,13 +952,38 @@
         };
 
         const normalizeTraceEventsFromStatus = function (data) {
+            const strategyLabelMap = {
+                auto: "Auto",
+                react: "ReAct",
+                cot: "CoT",
+                plan_execute: "Plan-Execute",
+                reflexion: "Reflexion",
+            };
+            const buildMindforgeStepTitle = function (step) {
+                const stepId = (step && step.step_id) ? String(step.step_id) : "";
+                const executor = (step && step.executor) ? String(step.executor) : "";
+                const output = (step && typeof step.output === "object" && step.output) ? step.output : {};
+                if (!executor.startsWith("mindforgeRunner")) {
+                    return `步骤 ${stepId}`;
+                }
+                const strategyKey = String(output.mindforge_strategy || "auto").trim().toLowerCase();
+                const strategyLabel = strategyLabelMap[strategyKey] || "Auto";
+                const subKeys = Array.isArray(output.mindforge_sub_strategies) ? output.mindforge_sub_strategies : [];
+                const subLabels = subKeys
+                    .map((item) => strategyLabelMap[String(item || "").trim().toLowerCase()] || "")
+                    .filter((item, index, arr) => item && arr.indexOf(item) === index);
+                if (strategyLabel === "Auto" && subLabels.length > 0) {
+                    return `步骤 ${stepId} · 心法 ${strategyLabel}（子心法：${subLabels.join("/")}）`;
+                }
+                return `步骤 ${stepId} · 心法 ${strategyLabel}`;
+            };
             if (data && data.process_trace && Array.isArray(data.process_trace.events)) {
                 return data.process_trace.events;
             }
             if (data && Array.isArray(data.plan_steps)) {
                 return data.plan_steps.map((step) => ({
                     kind: "thinking",
-                    title: `步骤 ${step.step_id || ""}`,
+                    title: buildMindforgeStepTitle(step),
                     status: step.status || "success",
                     input: { executor: step.executor, step_type: step.step_type },
                     output: step.output,
@@ -703,6 +994,23 @@
             return [];
         };
 
+        const buildEventOpenKey = function (event, index) {
+            const kind = String(event && event.kind || "");
+            const title = String(event && event.title || "");
+            const ts = String(event && event.ts || "");
+            return `${kind}::${title}::${ts}::${index}`;
+        };
+
+        const persistTraceOpenKeys = function (container) {
+            if (!container) {
+                return;
+            }
+            const openKeys = Array.from(container.querySelectorAll("details.process-trace-step[open]"))
+                .map((node) => String(node.dataset.eventOpenKey || "").trim())
+                .filter(Boolean);
+            writeUiState({ traceOpenKeys: openKeys });
+        };
+
         const renderProcessTraceEvents = function (container, events) {
             if (!container) {
                 return;
@@ -710,14 +1018,26 @@
             const eventList = Array.isArray(events) ? events : [];
             if (!eventList.length) {
                 container.innerHTML = "";
+                container.style.display = "none";
+                writeUiState({ traceOpenKeys: [] });
                 return;
             }
+            container.style.display = "";
+            const oldOpenKeys = new Set(
+                Array.from(container.querySelectorAll("details.process-trace-step[open]"))
+                    .map((node) => String(node.dataset.eventOpenKey || "").trim())
+                    .filter(Boolean)
+            );
+            const savedTraceOpenKeys = readUiState().traceOpenKeys;
+            const savedOpenKeys = new Set(Array.isArray(savedTraceOpenKeys) ? savedTraceOpenKeys : []);
             const itemHtml = eventList.map((event, index) => {
                 const inputHtml = formatDataForHtml(event.input);
                 const outputHtml = formatDataForHtml(event.output);
                 const errorHtml = formatDataForHtml(event.error);
+                const openKey = buildEventOpenKey(event, index);
+                const shouldOpen = oldOpenKeys.has(openKey) || savedOpenKeys.has(openKey);
                 return `
-                    <details class="process-trace-step">
+                    <details class="process-trace-step" data-event-open-key="${toHtml(openKey)}" ${shouldOpen ? "open" : ""}>
                         <summary>${index + 1}. ${toHtml(event.title || "步骤")} · ${toHtml(event.status || "success")}${event.ts ? ` · ${toHtml(event.ts)}` : ""} · ${toHtml(formatEventKindLabel(event.kind))}${normalizeTokenUsage(event.token_usage) ? ` · Token ${normalizeTokenUsage(event.token_usage).total_tokens}` : ""}</summary>
                         ${event.kind ? `<div class="process-trace-block"><strong>类型：</strong>${toHtml(formatEventKindLabel(event.kind))}</div>` : ""}
                         ${normalizeTokenUsage(event.token_usage) ? `<div class="process-trace-block"><strong>Token：</strong>${toHtml(formatTokenUsageLabel(event.token_usage).replace("Token: ", ""))}</div>` : ""}
@@ -728,13 +1048,251 @@
                 `;
             }).join("");
             container.innerHTML = itemHtml;
+            container.querySelectorAll("details.process-trace-step").forEach((detailsNode) => {
+                detailsNode.addEventListener("toggle", function () {
+                    persistTraceOpenKeys(container);
+                });
+            });
+            persistTraceOpenKeys(container);
         };
 
-        const scrollConversationToBottom = function () {
+        const syncInteractionSelectOptions = function (selectNode, options, preserveValue) {
+            if (!selectNode) {
+                return;
+            }
+            const optionList = Array.isArray(options) ? options : [];
+            const normalizedCurrentValue = String(preserveValue || "");
+            const fragment = document.createDocumentFragment();
+            let hasMatchedValue = false;
+            optionList.forEach((item) => {
+                const value = String((item && (item.value || item.id || item.key)) || "").trim();
+                const label = String((item && item.label) || value).trim();
+                if (!value) {
+                    return;
+                }
+                const optionNode = document.createElement("option");
+                optionNode.value = value;
+                optionNode.textContent = label;
+                if (normalizedCurrentValue && value === normalizedCurrentValue) {
+                    optionNode.selected = true;
+                    hasMatchedValue = true;
+                }
+                fragment.appendChild(optionNode);
+            });
+            selectNode.innerHTML = "";
+            selectNode.appendChild(fragment);
+            if (normalizedCurrentValue && !hasMatchedValue) {
+                selectNode.value = normalizedCurrentValue;
+            }
+        };
+
+        const getSelectionSnapshot = function (inputNode) {
+            if (!inputNode || inputNode.tagName !== "INPUT") {
+                return null;
+            }
+            const inputType = String(inputNode.type || "").toLowerCase();
+            if (!["text", "password", "search", "url", "tel"].includes(inputType)) {
+                return null;
+            }
+            if (typeof inputNode.selectionStart !== "number" || typeof inputNode.selectionEnd !== "number") {
+                return null;
+            }
+            return {
+                start: inputNode.selectionStart,
+                end: inputNode.selectionEnd,
+            };
+        };
+
+        const restoreSelectionSnapshot = function (inputNode, snapshot) {
+            if (!inputNode || !snapshot || inputNode.tagName !== "INPUT") {
+                return;
+            }
+            try {
+                inputNode.setSelectionRange(snapshot.start, snapshot.end);
+            } catch (error) {
+                // 某些输入类型不支持光标控制，忽略即可
+            }
+        };
+
+        const renderInteractionCard = function (container, interactionPayload) {
+            if (!container) {
+                return;
+            }
+            const payload = interactionPayload && typeof interactionPayload === "object" ? interactionPayload : null;
+            const request = payload && payload.request && typeof payload.request === "object" ? payload.request : null;
+            if (!payload || !payload.pending || !request || !request.interaction_id) {
+                container.innerHTML = "";
+                return;
+            }
+            const interactionType = String(request.type || "").trim();
+            const titleText = String(request.title || "请补充交互输入").trim();
+            const descText = String(request.description || "").trim();
+            const placeholder = String(request.placeholder || "").trim();
+            const submitLabel = String(request.submit_label || "提交").trim() || "提交";
+            const required = Boolean(request.required);
+            const options = Array.isArray(request.options) ? request.options : [];
+            const interactionTip = String(payload.prompt || "任务已暂停，等待你的输入后继续执行。").trim();
+            const interactionId = String(request.interaction_id || "").trim();
+
+            const existingCard = container.querySelector(".interaction-card");
+            const existingInteractionId = existingCard ? String(existingCard.dataset.interactionId || "").trim() : "";
+            const existingInputNode = existingCard ? existingCard.querySelector("[data-interaction-input='1']") : null;
+            const activeElement = document.activeElement;
+            const isEditingInteractionInput = Boolean(
+                existingCard
+                && existingInputNode
+                && activeElement
+                && activeElement === existingInputNode
+            );
+
+            if (existingCard && existingInteractionId === interactionId) {
+                const titleNode = existingCard.querySelector("[data-interaction-title='1']");
+                const descNode = existingCard.querySelector("[data-interaction-desc='1']");
+                const tipNode = existingCard.querySelector("[data-interaction-tip='1']");
+                const submitButtonNode = existingCard.querySelector("[data-interaction-submit='1']");
+                if (titleNode) {
+                    titleNode.textContent = titleText;
+                }
+                if (descNode) {
+                    if (descText) {
+                        descNode.textContent = descText;
+                        descNode.style.display = "";
+                    } else {
+                        descNode.textContent = "";
+                        descNode.style.display = "none";
+                    }
+                }
+                if (tipNode) {
+                    tipNode.textContent = interactionTip;
+                }
+                if (submitButtonNode) {
+                    submitButtonNode.textContent = submitLabel;
+                }
+
+                if (existingInputNode) {
+                    if (interactionType === "single_select" && existingInputNode.tagName === "SELECT") {
+                        if (!isEditingInteractionInput) {
+                            const preserveValue = String(existingInputNode.value || "");
+                            syncInteractionSelectOptions(existingInputNode, options, preserveValue);
+                        }
+                        return;
+                    }
+                    if (interactionType !== "single_select" && existingInputNode.tagName === "INPUT") {
+                        const desiredType = interactionType === "password" ? "password" : "text";
+                        if (String(existingInputNode.type || "").toLowerCase() === desiredType) {
+                            const selectionSnapshot = isEditingInteractionInput ? getSelectionSnapshot(existingInputNode) : null;
+                            existingInputNode.placeholder = placeholder;
+                            if (required) {
+                                existingInputNode.setAttribute("required", "required");
+                            } else {
+                                existingInputNode.removeAttribute("required");
+                            }
+                            if (selectionSnapshot) {
+                                restoreSelectionSnapshot(existingInputNode, selectionSnapshot);
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+
+            let inputHtml = "";
+            if (interactionType === "single_select") {
+                const optionHtml = options
+                    .map((item) => {
+                        const value = String((item && (item.value || item.id || item.key)) || "").trim();
+                        const label = String((item && item.label) || value).trim();
+                        if (!value) {
+                            return "";
+                        }
+                        return `<option value="${toHtml(value)}">${toHtml(label)}</option>`;
+                    })
+                    .filter(Boolean)
+                    .join("");
+                inputHtml = `<select data-interaction-input="1">${optionHtml}</select>`;
+            } else {
+                const inputType = interactionType === "password" ? "password" : "text";
+                inputHtml = `<input type="${inputType}" data-interaction-input="1" placeholder="${toHtml(placeholder)}" ${required ? "required" : ""}>`;
+            }
+            container.innerHTML = `
+                <div class="interaction-card" data-interaction-id="${toHtml(request.interaction_id)}">
+                    <h4 data-interaction-title="1">${toHtml(titleText)}</h4>
+                    <div class="meta" data-interaction-desc="1" ${descText ? "" : "style='display:none;'"}>${toHtml(descText)}</div>
+                    <div class="interaction-tip" data-interaction-tip="1">${toHtml(interactionTip)}</div>
+                    ${inputHtml}
+                    <button type="button" class="chip llm-chip-btn" data-interaction-submit="1">${toHtml(submitLabel)}</button>
+                    <span class="meta" data-interaction-status-text="1"></span>
+                </div>
+            `;
+            const submitButton = container.querySelector("[data-interaction-submit='1']");
+            const inputNode = container.querySelector("[data-interaction-input='1']");
+            const statusNode = container.querySelector("[data-interaction-status-text='1']");
+            if (!submitButton || !inputNode) {
+                return;
+            }
+            submitButton.addEventListener("click", function () {
+                if (!activeTaskId) {
+                    return;
+                }
+                if (!taskInteractionSubmitUrlTemplate) {
+                    setRecordStatus("缺少交互提交地址配置");
+                    return;
+                }
+                const interactionValue = String(inputNode.value || "").trim();
+                if (required && !interactionValue) {
+                    if (statusNode) {
+                        statusNode.textContent = "请先输入后再提交";
+                    }
+                    return;
+                }
+                const submitUrl = getTaskUrl(taskInteractionSubmitUrlTemplate, activeTaskId, "interaction-submit");
+                if (!submitUrl) {
+                    setRecordStatus("交互提交地址无效");
+                    return;
+                }
+                const submitData = new FormData();
+                const csrfToken = form.querySelector("input[name='csrfmiddlewaretoken']");
+                if (csrfToken) {
+                    submitData.append("csrfmiddlewaretoken", csrfToken.value);
+                }
+                submitData.append("interaction_id", String(request.interaction_id || ""));
+                submitData.append("interaction_value", interactionValue);
+                submitButton.disabled = true;
+                fetch(submitUrl, {
+                    method: "POST",
+                    body: submitData,
+                })
+                    .then((response) => response.json())
+                    .then((data) => {
+                        if (!data || data.success !== true) {
+                            throw new Error((data && data.error) || "交互提交失败");
+                        }
+                        if (statusNode) {
+                            statusNode.textContent = "已提交，继续处理中...";
+                        }
+                        setRecordStatus("交互信息已提交，任务继续执行中");
+                    })
+                    .catch((error) => {
+                        submitButton.disabled = false;
+                        if (statusNode) {
+                            statusNode.textContent = error && error.message ? error.message : "交互提交失败";
+                        }
+                    });
+            });
+        };
+
+        const scrollConversationToBottom = function (force) {
             if (!conversationBox) {
                 return;
             }
+            if (!force && !autoFollowBottom) {
+                return;
+            }
             conversationBox.scrollTop = conversationBox.scrollHeight;
+            writeUiState({
+                autoFollowBottom: true,
+                scrollTop: conversationBox.scrollTop,
+            });
         };
 
         const setAwaitingState = function (awaiting) {
@@ -744,11 +1302,23 @@
             }
             submitButton.disabled = false;
             submitButton.textContent = isAwaitingReply ? "停止" : "发送";
+            if (isAwaitingReply) {
+                setRecordStatus("等待模型回复...");
+            } else {
+                setRecordStatus(defaultRecordStatusText);
+            }
         };
 
         const companionAssistantName = "{% if is_companion_chat and companion_chat %}{{ companion_chat.display_name|default:companion_chat.name|escapejs }}{% else %}助手{% endif %}";
+        const applyAssistantResponderName = function (refs, responderName) {
+            if (!refs || !refs.metaRoleNode) {
+                return;
+            }
+            const normalizedName = String(responderName || "").trim();
+            refs.metaRoleNode.textContent = normalizedName || companionAssistantName || "助手";
+        };
 
-        const appendOptimisticMessageRow = function (role, content, createdAt, attachmentName) {
+        const appendOptimisticMessageRow = function (role, content, createdAt, attachmentName, responderName) {
             if (!conversationTrack) {
                 return null;
             }
@@ -760,7 +1330,15 @@
             const meta = document.createElement("div");
             meta.className = "meta";
             meta.style.marginTop = "0";
-            meta.innerHTML = `${role === "user" ? "你" : companionAssistantName} · ${createdAt}`;
+            const metaRoleNode = document.createElement("span");
+            metaRoleNode.setAttribute("data-message-role-label", "1");
+            metaRoleNode.textContent = role === "user" ? "你" : (String(responderName || "").trim() || companionAssistantName);
+            const metaCreatedNode = document.createElement("span");
+            metaCreatedNode.setAttribute("data-message-created-at", "1");
+            metaCreatedNode.textContent = createdAt;
+            meta.appendChild(metaRoleNode);
+            meta.appendChild(document.createTextNode(" · "));
+            meta.appendChild(metaCreatedNode);
             let tokenMetaNode = null;
             if (role !== "user") {
                 tokenMetaNode = document.createElement("span");
@@ -778,21 +1356,26 @@
                 textWrap.appendChild(attachmentLine);
             }
             const textNode = document.createElement("div");
-            textNode.innerHTML = toHtml(content || "");
+            textNode.setAttribute("data-message-content", "1");
+            textNode.innerHTML = renderMessageHtml(content || "", "");
             textWrap.appendChild(textNode);
 
             bubble.appendChild(meta);
             let traceContainer = null;
+            let interactionContainer = null;
             if (role !== "user") {
                 traceContainer = document.createElement("div");
                 traceContainer.className = "process-trace-wrap";
                 bubble.appendChild(traceContainer);
+                interactionContainer = document.createElement("div");
+                interactionContainer.setAttribute("data-interaction-container", "1");
+                bubble.appendChild(interactionContainer);
             }
             bubble.appendChild(textWrap);
             messageRow.appendChild(bubble);
             conversationTrack.appendChild(messageRow);
-            scrollConversationToBottom();
-            return { textNode, traceContainer, tokenMetaNode };
+            scrollConversationToBottom(true);
+            return { textNode, traceContainer, interactionContainer, tokenMetaNode, metaRoleNode };
         };
 
         const stopPollingTask = function () {
@@ -802,13 +1385,84 @@
             }
             activeTaskId = null;
             currentAssistantMessageRefs = null;
+            stagnantPollRounds = 0;
+            lastPolledAssistantContent = "";
+        };
+
+        const resolveAssistantMessageRefsById = function (messageId) {
+            const normalizedId = Number(messageId || 0);
+            if (!Number.isFinite(normalizedId) || normalizedId <= 0) {
+                return null;
+            }
+            const row = document.querySelector(`.message-row.assistant[data-message-id="${normalizedId}"]`);
+            if (!row) {
+                return null;
+            }
+            const bubble = row.querySelector(".bubble-assistant");
+            if (!bubble) {
+                return null;
+            }
+            let traceContainer = bubble.querySelector(".process-trace-wrap");
+            if (!traceContainer) {
+                traceContainer = document.createElement("div");
+                traceContainer.className = "process-trace-wrap";
+                traceContainer.style.display = "none";
+                const messageTextNode = bubble.querySelector(".message-text");
+                if (messageTextNode) {
+                    bubble.insertBefore(traceContainer, messageTextNode);
+                } else {
+                    bubble.appendChild(traceContainer);
+                }
+            }
+            let interactionContainer = bubble.querySelector("[data-interaction-container='1']");
+            if (!interactionContainer) {
+                interactionContainer = document.createElement("div");
+                interactionContainer.setAttribute("data-interaction-container", "1");
+                const messageTextNode = bubble.querySelector(".message-text");
+                if (messageTextNode) {
+                    bubble.insertBefore(interactionContainer, messageTextNode);
+                } else {
+                    bubble.appendChild(interactionContainer);
+                }
+            }
+            const messageText = bubble.querySelector(".message-text");
+            if (!messageText) {
+                return null;
+            }
+            let textNode = messageText.querySelector("[data-message-content='1']");
+            if (!textNode) {
+                textNode = document.createElement("div");
+                textNode.setAttribute("data-message-content", "1");
+                textNode.innerHTML = messageText.innerHTML;
+                messageText.innerHTML = "";
+                messageText.appendChild(textNode);
+            }
+            const tokenMetaNode = bubble.querySelector(".token-usage-meta");
+            const metaRoleNode = bubble.querySelector("[data-message-role-label='1']");
+            return { textNode, traceContainer, interactionContainer, tokenMetaNode, metaRoleNode };
+        };
+
+        const resolveLatestAssistantMessageRefs = function () {
+            const rows = Array.from(document.querySelectorAll(".message-row.assistant[data-message-id]"));
+            for (let index = rows.length - 1; index >= 0; index -= 1) {
+                const row = rows[index];
+                const messageId = Number(row.dataset.messageId || "0");
+                if (!Number.isFinite(messageId) || messageId <= 0) {
+                    continue;
+                }
+                const refs = resolveAssistantMessageRefsById(messageId);
+                if (refs) {
+                    return refs;
+                }
+            }
+            return null;
         };
 
         const pollTaskStatus = function () {
             if (!activeTaskId) {
                 return;
             }
-            const statusUrl = getTaskUrl(taskStatusUrlTemplate, activeTaskId);
+            const statusUrl = getTaskUrl(taskStatusUrlTemplate, activeTaskId, "status");
             if (!statusUrl) {
                 stopPollingTask();
                 setAwaitingState(false);
@@ -820,8 +1474,30 @@
                     if (!data || data.success !== true) {
                         return;
                     }
+                    const interactionPayload = data.interaction && typeof data.interaction === "object" ? data.interaction : null;
+                    const isInteractionPending = Boolean(interactionPayload && interactionPayload.pending);
+                    const latestContent = String(data.content || "");
+                    const latestContentHtml = typeof data.content_html === "string" ? data.content_html : "";
+                    const hasContentIncrement = latestContent.trim() !== lastPolledAssistantContent.trim();
+                    if (hasContentIncrement) {
+                        stagnantPollRounds = 0;
+                    } else {
+                        stagnantPollRounds += 1;
+                    }
+                    lastPolledAssistantContent = latestContent;
+                    const statusHintText = buildTaskStatusHintText(data);
                     if (currentAssistantMessageRefs && currentAssistantMessageRefs.textNode) {
-                        currentAssistantMessageRefs.textNode.innerHTML = toHtml(data.content || "");
+                        const shouldInjectHint = data.status === "running"
+                            && (!latestContent.trim() || latestContent.trim() === "思考中...")
+                            && Boolean(statusHintText);
+                        const renderedText = shouldInjectHint
+                            ? `思考中...\n${statusHintText}`
+                            : latestContent;
+                        currentAssistantMessageRefs.textNode.innerHTML = renderMessageHtml(
+                            renderedText,
+                            shouldInjectHint ? "" : latestContentHtml
+                        );
+                        applyAssistantResponderName(currentAssistantMessageRefs, data.responder_name);
                         if (currentAssistantMessageRefs.tokenMetaNode) {
                             currentAssistantMessageRefs.tokenMetaNode.textContent = formatTokenUsageLabel(data.token_usage);
                         }
@@ -829,7 +1505,18 @@
                             currentAssistantMessageRefs.traceContainer,
                             normalizeTraceEventsFromStatus(data)
                         );
-                        scrollConversationToBottom();
+                        renderInteractionCard(
+                            currentAssistantMessageRefs.interactionContainer,
+                            interactionPayload
+                        );
+                        scrollConversationToBottom(false);
+                    }
+                    if (!data.is_done) {
+                        if (isInteractionPending) {
+                            setRecordStatus(statusHintText || "等待你完成交互输入...");
+                        } else {
+                            setRecordStatus(statusHintText || "等待模型回复...");
+                        }
                     }
                     if (data.is_done) {
                         stopPollingTask();
@@ -846,7 +1533,7 @@
                 setAwaitingState(false);
                 return;
             }
-            const stopUrl = getTaskUrl(taskStopUrlTemplate, activeTaskId);
+            const stopUrl = getTaskUrl(taskStopUrlTemplate, activeTaskId, "stop");
             if (!stopUrl) {
                 setAwaitingState(false);
                 return;
@@ -906,7 +1593,7 @@
             const timeText = `${hh}:${mm}:${ss}`;
 
             appendOptimisticMessageRow("user", textarea.value || "", timeText, attachmentName);
-            currentAssistantMessageRefs = appendOptimisticMessageRow("assistant", "思考中...", timeText, "");
+            currentAssistantMessageRefs = appendOptimisticMessageRow("assistant", "思考中...", timeText, "", "");
             setAwaitingState(true);
 
             const sendData = new FormData(form);
@@ -929,8 +1616,14 @@
                         throw new Error((data && data.error) || "发送失败");
                     }
                     activeTaskId = data.task_id;
+                    lastPolledAssistantContent = String((data.assistant_message && data.assistant_message.content) || "");
+                    stagnantPollRounds = 0;
                     if (currentAssistantMessageRefs && currentAssistantMessageRefs.textNode && data.assistant_message) {
-                        currentAssistantMessageRefs.textNode.innerHTML = toHtml(data.assistant_message.content || "");
+                        currentAssistantMessageRefs.textNode.innerHTML = renderMessageHtml(
+                            data.assistant_message.content || "",
+                            data.assistant_message.content_html || ""
+                        );
+                        applyAssistantResponderName(currentAssistantMessageRefs, data.assistant_message.responder_name);
                     }
                     pollTaskStatus();
                     pollingTimer = setInterval(pollTaskStatus, 1000);
@@ -944,8 +1637,11 @@
                 });
         });
 
-        // 绑定表单提交事件
+        // 兜底同步提交：仅在未启用异步发送场景生效
         form.addEventListener("submit", function (event) {
+            if (asyncSendUrl) {
+                return;
+            }
             if (isRecording) {
                 event.preventDefault();
                 stopRecording();
@@ -960,6 +1656,29 @@
 
         textarea.placeholder = "有问题，尽管问";
         textarea.rows = 1;
+
+        if (!isReadonlyView && inflightTaskId > 0 && !isAwaitingReply) {
+            let inflightRefs = resolveAssistantMessageRefsById(inflightAssistantMessageId);
+            if (!inflightRefs) {
+                inflightRefs = resolveLatestAssistantMessageRefs();
+            }
+            if (!inflightRefs) {
+                const now = new Date();
+                const hh = String(now.getHours()).padStart(2, "0");
+                const mm = String(now.getMinutes()).padStart(2, "0");
+                const ss = String(now.getSeconds()).padStart(2, "0");
+                inflightRefs = appendOptimisticMessageRow("assistant", "思考中...", `${hh}:${mm}:${ss}`, "", "");
+            }
+            if (inflightRefs) {
+                currentAssistantMessageRefs = inflightRefs;
+                activeTaskId = inflightTaskId;
+                lastPolledAssistantContent = String((inflightRefs.textNode && inflightRefs.textNode.textContent) || "");
+                stagnantPollRounds = 0;
+                setAwaitingState(true);
+                pollTaskStatus();
+                pollingTimer = setInterval(pollTaskStatus, 1000);
+            }
+        }
 
         const hideMentionSuggestions = function () {
             mentionCandidates = [];
@@ -1136,7 +1855,6 @@
         }
 
         const recordToggle = document.getElementById("voiceRecordToggle");
-        const recordStatus = document.getElementById("voiceRecordStatus");
         const SpeechRecognitionApi = window.SpeechRecognition || window.webkitSpeechRecognition;
 
         let mediaRecorder = null;
@@ -1147,12 +1865,6 @@
         let isRecording = false;
         let isSpeechListening = false;
         let transcriptText = "";
-
-        const setRecordStatus = function (text) {
-            if (recordStatus) {
-                recordStatus.textContent = text;
-            }
-        };
 
         const updateAttachmentInfo = function () {
             if (!attachmentInfo || !fileInput) {

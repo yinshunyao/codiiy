@@ -1,12 +1,14 @@
 import os
 import io
+import importlib
+import ast
 import json
 import platform
 import re
 import time
 import zipfile
 import threading
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 from pathlib import PurePosixPath
 from types import SimpleNamespace
@@ -32,8 +34,13 @@ from agents.manager import (
     resolve_agent_item_dir as resolve_agent_item_dir_via_manager,
 )
 from tools.component_call_tool import ComponentCallTool
-from tools.knowledge_curation_tool import KnowledgeCurationTool
-from tools.manager import list_toolsets
+from tools.manager import (
+    filter_enabled_toolsets,
+    get_toolset_enabled,
+    list_toolsets,
+    list_toolset_source_options,
+    set_toolset_enabled,
+)
 
 from .forms import (
     ChatMessageForm,
@@ -58,11 +65,16 @@ from .models import (
     Project,
     RequirementMessage,
     RequirementSession,
+    SystemRuntimeSetting,
 )
 from .services import analyzer
+from .chat_render import render_chat_content_html
 from .local_llm_server import ensure_local_ollama_server
 from .orchestration import run_companion_orchestration
+from .orchestration.protocol import OrchestrationStoppedError
 from .orchestration.capability_search import (
+    refresh_capability_index,
+    search_capabilities,
     search_agent_entries,
     search_component_functions,
     search_toolset_entries,
@@ -207,6 +219,8 @@ THEME_LABELS = {
 }
 DEFAULT_UI_THEME = THEME_DARK
 DEFAULT_COMPONENT_CONFIG_NAME = "default"
+PERMISSION_RESTRICTION_SETTING_KEY = "permission_restriction_enabled"
+COMPANION_FINAL_STEP_WATCHDOG_SECONDS_SETTING_KEY = "companion_final_step_watchdog_seconds"
 SEARCH_ENGINE_AUTO = "auto"
 SEARCH_ENGINE_NATIVE = "native"
 SEARCH_ENGINE_ZVEC = "zvec"
@@ -223,6 +237,25 @@ SEARCH_MODE_OPTIONS = [
     {"value": SEARCH_MODE_TRADITIONAL, "label": "关键词检索"},
     {"value": SEARCH_MODE_VECTOR, "label": "向量检索"},
 ]
+TOOLSET_SOURCE_VALUES = {"all", "native", "generated", "imported"}
+CAPABILITY_SEARCH_TYPE_AGENT = "agent"
+CAPABILITY_SEARCH_TYPE_TOOLSET = "toolset"
+CAPABILITY_SEARCH_TYPE_COMPONENT = "component"
+CAPABILITY_SEARCH_TYPE_OPTIONS = [
+    {"value": CAPABILITY_SEARCH_TYPE_AGENT, "label": "智能体"},
+    {"value": CAPABILITY_SEARCH_TYPE_TOOLSET, "label": "工具集"},
+    {"value": CAPABILITY_SEARCH_TYPE_COMPONENT, "label": "组件"},
+]
+CAPABILITY_SEARCH_TYPE_TO_KIND = {
+    CAPABILITY_SEARCH_TYPE_AGENT: "agent_item",
+    CAPABILITY_SEARCH_TYPE_TOOLSET: "toolset",
+    CAPABILITY_SEARCH_TYPE_COMPONENT: "component_function",
+}
+CAPABILITY_KIND_LABELS = {
+    "agent_item": "智能体",
+    "toolset": "工具集",
+    "component_function": "组件",
+}
 OS_FILTER_ALL = "all"
 SUPPORTED_SYSTEM_KEYS = ("macos", "linux", "windows")
 OS_LABELS = {
@@ -239,10 +272,22 @@ SUMMARY_SESSION_TITLE_PREFIX = "总结："
 LOCAL_LLM_PROCESS_BOOT_AT = timezone.now()
 LOCAL_LLM_RUNNING_TASK_IDS = set()
 LOCAL_LLM_RUNNING_TASK_IDS_LOCK = threading.Lock()
+CHAT_REPLY_PROCESS_BOOT_AT = timezone.now()
+CHAT_REPLY_RECOVERY_LOCK = threading.Lock()
+CHAT_REPLY_RECOVERY_DONE = False
 LLAMA_CPP_RUNTIME_LOCK = threading.Lock()
 LLAMA_CPP_RUNTIME_MODELS = {}
 CHAT_ORCHESTRATION_META = {}
 CHAT_ORCHESTRATION_META_LOCK = threading.Lock()
+CHAT_INTERACTION_RESPONSE_CACHE = {}
+CHAT_INTERACTION_RESPONSE_CACHE_LOCK = threading.Lock()
+INTERACTION_TYPE_PASSWORD = "password"
+INTERACTION_TYPE_SINGLE_SELECT = "single_select"
+INTERACTION_TYPE_TEXT = "text"
+INTERACTION_PROTOCOL_BLOCK_PATTERN = re.compile(
+    r"```interaction\s*([\s\S]*?)```",
+    re.IGNORECASE,
+)
 
 try:
     from tools.rule_reader import RuleReader
@@ -339,6 +384,65 @@ def _normalize_search_mode(raw_value: str) -> str:
     return SEARCH_MODE_HYBRID
 
 
+def _normalize_toolset_source(raw_value: str) -> str:
+    value = str(raw_value or "").strip().lower()
+    if value in TOOLSET_SOURCE_VALUES:
+        return value
+    return "all"
+
+
+def _normalize_capability_search_types(raw_values) -> list[str]:
+    if not raw_values:
+        return [item["value"] for item in CAPABILITY_SEARCH_TYPE_OPTIONS]
+    normalized = []
+    for raw in raw_values:
+        if raw is None:
+            continue
+        chunks = str(raw).replace("，", ",").split(",")
+        for chunk in chunks:
+            value = str(chunk or "").strip().lower()
+            if value not in CAPABILITY_SEARCH_TYPE_TO_KIND:
+                continue
+            if value in normalized:
+                continue
+            normalized.append(value)
+    if normalized:
+        return normalized
+    return [item["value"] for item in CAPABILITY_SEARCH_TYPE_OPTIONS]
+
+
+def _build_capability_search_jump_url(kind: str, module_name: str, item_name: str, query: str, search_engine: str, search_mode: str) -> str:
+    if kind == "agent_item":
+        target_module = module_name if module_name in ALLOWED_AGENT_MODULES else next(iter(ALLOWED_AGENT_MODULES.keys()), "")
+        if not target_module:
+            return ""
+        query_args = {
+            "q": item_name or query,
+            "search_engine": search_engine,
+            "search_mode": search_mode,
+        }
+        return f"{reverse('agent_item_list', kwargs={'module_name': target_module})}?{urlencode(query_args)}"
+    if kind == "toolset":
+        query_args = {
+            "q": item_name or query,
+            "search_engine": search_engine,
+            "search_mode": search_mode,
+        }
+        return f"{reverse('toolset_list')}?{urlencode(query_args)}"
+    if kind == "component_function":
+        target_module = module_name if module_name in ALLOWED_CONTROL_MODULES else next(iter(ALLOWED_CONTROL_MODULES.keys()), "")
+        if not target_module:
+            return ""
+        query_args = {
+            "q": item_name or query,
+            "search_engine": search_engine,
+            "search_mode": search_mode,
+            "os": OS_FILTER_ALL,
+        }
+        return f"{reverse('control_function_list', kwargs={'module_name': target_module})}?{urlencode(query_args)}"
+    return ""
+
+
 def home(request):
     return redirect("session_list")
 
@@ -397,6 +501,61 @@ def _resolve_companion_for_chat_session(session_obj):
     return queryset.first()
 
 
+def _extract_companion_mention_tokens(raw_text: str):
+    text = str(raw_text or "")
+    if not text:
+        return []
+    tokens = re.findall(r"@([^\s@,，。.!！？:：;；\(\)\[\]\{\}<>《》\"“”'`]+)", text)
+    normalized_tokens = []
+    for token in tokens:
+        cleaned = str(token or "").strip().lstrip("@")
+        if not cleaned:
+            continue
+        if cleaned not in normalized_tokens:
+            normalized_tokens.append(cleaned)
+    return normalized_tokens
+
+
+def _resolve_companion_from_user_mention(content_text, *, user, current_project):
+    mention_tokens = _extract_companion_mention_tokens(content_text)
+    if not mention_tokens or not user:
+        return None
+    queryset = CompanionProfile.objects.filter(
+        created_by=user,
+        is_active=True,
+    )
+    if current_project:
+        queryset = queryset.filter(project=current_project)
+    candidates = list(queryset.only("id", "name", "display_name", "project_id", "created_by_id", "is_active"))
+    if not candidates:
+        return None
+    token_map = {str(token).strip().lower(): token for token in mention_tokens if str(token).strip()}
+    if not token_map:
+        return None
+    for item in candidates:
+        name_key = str(item.name or "").strip().lower()
+        if name_key and name_key in token_map:
+            return item
+    for item in candidates:
+        display_key = str(item.display_name or "").strip().lower()
+        if display_key and display_key in token_map:
+            return item
+    return None
+
+
+def _resolve_runtime_companion_for_chat_request(session_obj, *, user, current_project, user_content):
+    bound_companion = _resolve_companion_for_chat_session(session_obj)
+    if bound_companion:
+        return bound_companion
+    if not _is_main_chat_session(session_obj):
+        return None
+    return _resolve_companion_from_user_mention(
+        user_content,
+        user=user,
+        current_project=current_project,
+    )
+
+
 def _build_companion_agent_capability_lines(companion):
     result_lines = []
     for module_key in companion.get_allowed_agent_modules():
@@ -442,6 +601,22 @@ def _build_system_skill_summary_lines(limit: int = 8):
     return lines
 
 
+def _build_interaction_protocol_prompt():
+    return (
+        "单轮交互协议（仅在确实需要用户补充时使用）：\n"
+        "- 当必须向用户索取关键输入（如密码、模式选择、补充参数）时，先返回一个独立代码块：\n"
+        "```interaction\n"
+        "{\"type\":\"password|single_select|text\",\"title\":\"...\",\"description\":\"...\",\"required\":true,"
+        "\"options\":[{\"id\":\"install\",\"value\":\"install\",\"label\":\"安装后重试\"}],"
+        "\"submit_label\":\"提交\",\"placeholder\":\"...\",\"meta\":{\"scene\":\"...\"}}\n"
+        "```\n"
+        "- 仅 `single_select` 需要 `options`；`password/text` 不需要 `options`。\n"
+        "- `single_select` 的每个选项必须至少包含 `value` 与 `label`，可选 `id`。\n"
+        "- `meta` 为可选字段，用于传递步骤ID、策略名、诊断信息等逻辑上下文。\n"
+        "- 交互代码块之外可写简短说明；收到用户补充后继续同一轮任务，不要重复索取同一信息。"
+    )
+
+
 def _build_companion_chat_system_prompt(companion, current_project):
     display_name = companion.display_name or companion.name
     role_title = str(companion.role_title or "").strip() or "伙伴"
@@ -449,11 +624,16 @@ def _build_companion_chat_system_prompt(companion, current_project):
     tone = str(companion.tone or "").strip() or "未配置"
     memory_notes = str(companion.memory_notes or "").strip() or "未配置"
     knowledge_path = str(companion.knowledge_path or "").strip() or "未配置"
-    agent_modules = companion.get_allowed_agent_modules()
-    control_modules = companion.get_allowed_control_modules()
-    toolsets = companion.get_allowed_toolsets()
-    control_components = companion.get_allowed_control_components()
-    control_functions = companion.get_allowed_control_functions()
+    permission_restriction_enabled = _get_permission_restriction_enabled()
+    permission_scope = _build_companion_permission_scope(
+        companion=companion,
+        permission_restriction_enabled=permission_restriction_enabled,
+    )
+    agent_modules = permission_scope["allowed_agent_modules"]
+    control_modules = permission_scope["allowed_control_modules"]
+    toolsets = permission_scope["allowed_toolsets"]
+    control_components = permission_scope["allowed_control_components"]
+    control_functions = permission_scope["allowed_control_functions"]
     agent_module_text = _build_companion_module_label_text(agent_modules, ALLOWED_AGENT_MODULES)
     control_module_text = _build_companion_module_label_text(control_modules, ALLOWED_CONTROL_MODULES)
     toolset_text = "、".join(toolsets) if toolsets else "未配置"
@@ -469,6 +649,12 @@ def _build_companion_chat_system_prompt(companion, current_project):
     if len(project_rules) > 6000:
         project_rules = f"{project_rules[:6000]}\n\n（规则内容过长，已截断）"
 
+    permission_mode_line = (
+        "- 权限限制模式：开启（按伙伴白名单限制）"
+        if permission_restriction_enabled
+        else "- 权限限制模式：关闭（调试模式，当前伙伴不做白名单限制）"
+    )
+
     sections = [
         (
             "你是当前会话绑定的伙伴，请严格按以下配置工作：\n"
@@ -481,12 +667,17 @@ def _build_companion_chat_system_prompt(companion, current_project):
         ),
         (
             "可用能力白名单：\n"
+            f"{permission_mode_line}\n"
             f"- 工具集：{toolset_text}\n"
             f"- 心法/号令模块：{agent_module_text}\n"
             f"- 工具/组件模块：{control_module_text}\n"
             f"- 组件白名单：{component_text}\n"
             f"- 组件 API 白名单：{function_text}{function_suffix}\n"
-            "- 你只能在以上白名单内声明和调用能力，不得越权。"
+            + (
+                "- 你只能在以上白名单内声明和调用能力，不得越权。"
+                if permission_restriction_enabled
+                else "- 当前处于调试放开模式，可按任务需要调用已注册能力。"
+            )
         ),
     ]
     if agent_capability_lines:
@@ -497,16 +688,28 @@ def _build_companion_chat_system_prompt(companion, current_project):
         sections.append("系统规则摘要（可参考）：\n" + "\n".join(rule_summary_lines))
     if project_rules:
         sections.append("项目规则（必须遵循）：\n" + project_rules)
+    execution_rule_line = (
+        "- 涉及动作执行时，仅可调用白名单中的工具和组件。"
+        if permission_restriction_enabled
+        else "- 涉及动作执行时，可调用已注册工具和组件（调试模式白名单放开）。"
+    )
     sections.append(
         "执行要求：\n"
         "- 回答时优先使用已配置的心法、号令、技能。\n"
-        "- 涉及动作执行时，仅可调用白名单中的工具和组件。\n"
+        f"{execution_rule_line}\n"
         "- 输出需显式遵循规则约束，保持可执行和可追溯。"
     )
+    sections.append(_build_interaction_protocol_prompt())
     return "\n\n".join(sections)
 
 
-def _build_companion_orchestration_context(session_obj, companion, current_project, selected_llm_model):
+def _build_companion_orchestration_context(
+    session_obj,
+    companion,
+    current_project,
+    selected_llm_model,
+    mindforge_strategy_override: str = "",
+):
     model_id = str(getattr(selected_llm_model, "model_id", "") or "").strip()
     if not model_id:
         model_id = str(getattr(settings, "QWEN_MODEL", "") or "").strip() or "qwen-plus"
@@ -515,25 +718,195 @@ def _build_companion_orchestration_context(session_obj, companion, current_proje
     )
     system_prompt = _build_companion_chat_system_prompt(companion, current_project=current_project)
     capability_search_mode = str(getattr(settings, "COMPANION_CAPABILITY_SEARCH_MODE", "hybrid") or "hybrid").strip()
+    default_strategy = str(getattr(settings, "COMPANION_MINDFORGE_STRATEGY", "auto") or "auto")
+    mindforge_strategy = _normalize_mindforge_strategy(mindforge_strategy_override or default_strategy)
+    project_root = str(getattr(current_project, "path", "") or "").strip()
+    permission_restriction_enabled = _get_permission_restriction_enabled()
+    permission_scope = _build_companion_permission_scope(
+        companion=companion,
+        permission_restriction_enabled=permission_restriction_enabled,
+    )
     return {
         "user_query": str((latest_user_message.content if latest_user_message else "") or "").strip(),
         "model_id": model_id,
+        "session_id": str(getattr(session_obj, "id", "") or ""),
+        "project_root": project_root,
         "phase": str(getattr(session_obj, "phase", "collecting") or "collecting"),
         "system_prompt": system_prompt,
         "capability_search_mode": capability_search_mode,
-        "allowed_toolsets": companion.get_allowed_toolsets(),
-        "allowed_agent_modules": companion.get_allowed_agent_modules(),
-        "allowed_control_modules": companion.get_allowed_control_modules(),
-        "allowed_control_components": companion.get_allowed_control_components(),
-        "allowed_control_functions": companion.get_allowed_control_functions(),
+        "mindforge_strategy": mindforge_strategy,
+        "permission_restriction_enabled": permission_restriction_enabled,
+        "allowed_toolsets": permission_scope["allowed_toolsets"],
+        "allowed_agent_modules": permission_scope["allowed_agent_modules"],
+        "allowed_control_modules": permission_scope["allowed_control_modules"],
+        "allowed_control_components": permission_scope["allowed_control_components"],
+        "allowed_control_functions": permission_scope["allowed_control_functions"],
         "companion": {
             "id": companion.id,
             "name": companion.name,
             "display_name": companion.display_name or companion.name,
             "role_title": companion.role_title,
+            "persona": companion.persona,
+            "tone": companion.tone,
+            "memory_notes": companion.memory_notes,
             "knowledge_path": companion.knowledge_path,
         },
     }
+
+
+def _normalize_mindforge_strategy(raw_value: str) -> str:
+    key = str(raw_value or "").strip().lower()
+    if key not in {"auto", "react", "cot", "plan_execute", "reflexion"}:
+        return "auto"
+    return key
+
+
+def _persist_chat_task_runtime_mindforge_strategy(task: ChatReplyTask, strategy: str) -> str:
+    if not task:
+        return "auto"
+    normalized = _normalize_mindforge_strategy(strategy)
+    trace_payload = _normalize_process_trace(getattr(task, "execution_trace", {}))
+    runtime = trace_payload.get("runtime") if isinstance(trace_payload.get("runtime"), dict) else {}
+    runtime["mindforge_strategy"] = normalized
+    trace_payload["runtime"] = runtime
+    task.execution_trace = trace_payload
+    task.save(update_fields=["execution_trace", "updated_at"])
+    return normalized
+
+
+def _extract_chat_task_runtime_mindforge_strategy(task: ChatReplyTask) -> str:
+    if not task:
+        return "auto"
+    trace_payload = _normalize_process_trace(getattr(task, "execution_trace", {}))
+    runtime = trace_payload.get("runtime") if isinstance(trace_payload.get("runtime"), dict) else {}
+    return _normalize_mindforge_strategy(str(runtime.get("mindforge_strategy") or "auto"))
+
+
+def _persist_chat_task_runtime_companion_override(task: ChatReplyTask, companion_id: int) -> int:
+    if not task:
+        return 0
+    normalized_id = 0
+    try:
+        normalized_id = int(companion_id or 0)
+    except (TypeError, ValueError):
+        normalized_id = 0
+    if normalized_id < 0:
+        normalized_id = 0
+    trace_payload = _normalize_process_trace(getattr(task, "execution_trace", {}))
+    runtime = trace_payload.get("runtime") if isinstance(trace_payload.get("runtime"), dict) else {}
+    runtime["effective_companion_id"] = normalized_id
+    trace_payload["runtime"] = runtime
+    task.execution_trace = trace_payload
+    task.save(update_fields=["execution_trace", "updated_at"])
+    return normalized_id
+
+
+def _extract_chat_task_runtime_companion_id(task: ChatReplyTask) -> int:
+    if not task:
+        return 0
+    trace_payload = _normalize_process_trace(getattr(task, "execution_trace", {}))
+    runtime = trace_payload.get("runtime") if isinstance(trace_payload.get("runtime"), dict) else {}
+    raw_value = runtime.get("effective_companion_id")
+    try:
+        normalized_id = int(raw_value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return normalized_id if normalized_id > 0 else 0
+
+
+def _resolve_responder_name_for_session_task(session_obj, task=None) -> str:
+    if not session_obj:
+        return "助手"
+    bound_companion = _resolve_companion_for_chat_session(session_obj)
+    if bound_companion:
+        return str(bound_companion.display_name or bound_companion.name or "助手").strip() or "助手"
+    runtime_companion_id = _extract_chat_task_runtime_companion_id(task) if task else 0
+    if runtime_companion_id <= 0:
+        return "助手"
+    queryset = CompanionProfile.objects.filter(id=runtime_companion_id)
+    if getattr(session_obj, "created_by_id", None):
+        queryset = queryset.filter(created_by_id=session_obj.created_by_id)
+    if getattr(session_obj, "project_id", None):
+        queryset = queryset.filter(project_id=session_obj.project_id)
+    runtime_companion = queryset.first()
+    if not runtime_companion:
+        return "助手"
+    return str(runtime_companion.display_name or runtime_companion.name or "助手").strip() or "助手"
+
+
+def _build_mindforge_strategy_options():
+    return [
+        {"key": "auto", "label": "Auto"},
+        {"key": "react", "label": "ReAct"},
+        {"key": "cot", "label": "CoT"},
+        {"key": "plan_execute", "label": "Plan-Execute"},
+        {"key": "reflexion", "label": "Reflexion"},
+    ]
+
+
+def _mindforge_strategy_label(strategy: str) -> str:
+    labels = {
+        "auto": "Auto",
+        "react": "ReAct",
+        "cot": "CoT",
+        "plan_execute": "Plan-Execute",
+        "reflexion": "Reflexion",
+    }
+    normalized = _normalize_mindforge_strategy(strategy)
+    return labels.get(normalized, "Auto")
+
+
+def _extract_mindforge_sub_strategy_labels(step_output: dict) -> list:
+    if not isinstance(step_output, dict):
+        return []
+    labels = []
+    for item in step_output.get("mindforge_sub_strategies") or []:
+        key = _normalize_mindforge_strategy(str(item or ""))
+        label = _mindforge_strategy_label(key)
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _build_step_trace_title(step: dict, step_executor: str, step_output: dict) -> str:
+    step_id = str(step.get("step_id") or "").strip()
+    base_title = f"步骤 {step_id}".strip()
+    if not str(step_executor or "").startswith("mindforgeRunner"):
+        return base_title
+    strategy_label = _mindforge_strategy_label(
+        str((step_output or {}).get("mindforge_strategy") or "")
+    )
+    sub_labels = _extract_mindforge_sub_strategy_labels(step_output=step_output)
+    if strategy_label == "Auto" and sub_labels:
+        return f"{base_title} · 心法 {strategy_label}（子心法：{'/'.join(sub_labels)}）"
+    return f"{base_title} · 心法 {strategy_label}"
+
+
+def _get_companion_mindforge_strategy_overrides(request) -> dict:
+    data = request.session.get("companion_mindforge_strategy_overrides", {})
+    return data if isinstance(data, dict) else {}
+
+
+def _get_companion_mindforge_strategy_for_request(request, companion_id: int) -> str:
+    default_strategy = _normalize_mindforge_strategy(str(getattr(settings, "COMPANION_MINDFORGE_STRATEGY", "auto") or "auto"))
+    if not companion_id:
+        return default_strategy
+    overrides = _get_companion_mindforge_strategy_overrides(request)
+    raw = str(overrides.get(str(companion_id)) or "").strip()
+    if not raw:
+        return default_strategy
+    return _normalize_mindforge_strategy(raw)
+
+
+def _set_companion_mindforge_strategy_for_request(request, companion_id: int, strategy: str) -> str:
+    normalized = _normalize_mindforge_strategy(strategy)
+    if not companion_id:
+        return normalized
+    overrides = _get_companion_mindforge_strategy_overrides(request)
+    overrides[str(companion_id)] = normalized
+    request.session["companion_mindforge_strategy_overrides"] = overrides
+    request.session.modified = True
+    return normalized
 
 
 def _build_chat_conversation_history(session_obj, current_project):
@@ -545,6 +918,8 @@ def _build_chat_conversation_history(session_obj, current_project):
     if companion:
         system_prompt = _build_companion_chat_system_prompt(companion, current_project=current_project)
         conversation_history = [{"role": "system", "content": system_prompt}] + conversation_history
+    else:
+        conversation_history = [{"role": "system", "content": _build_interaction_protocol_prompt()}] + conversation_history
     return conversation_history
 
 
@@ -585,7 +960,127 @@ def _get_chat_reply_emit_interval_seconds():
     return max(0.2, seconds)
 
 
-def _run_chat_reply_task(task_id):
+def _get_chat_reply_task_timeout_seconds():
+    try:
+        seconds = float(getattr(settings, "CHAT_REPLY_TASK_TIMEOUT_SECONDS", 180.0) or 180.0)
+    except (TypeError, ValueError):
+        seconds = 180.0
+    return max(10.0, seconds)
+
+
+def _get_companion_final_step_watchdog_seconds():
+    fallback = _get_chat_reply_task_timeout_seconds()
+    try:
+        fallback = float(getattr(settings, "COMPANION_FINAL_STEP_WATCHDOG_SECONDS", fallback) or fallback)
+    except (TypeError, ValueError):
+        fallback = _get_chat_reply_task_timeout_seconds()
+    fallback = max(10.0, fallback)
+    try:
+        value = SystemRuntimeSetting.get_float(
+            COMPANION_FINAL_STEP_WATCHDOG_SECONDS_SETTING_KEY,
+            default=fallback,
+        )
+        return max(10.0, float(value))
+    except (OperationalError, ProgrammingError):
+        return fallback
+    except Exception:
+        return fallback
+
+
+def _get_chat_reply_task_heartbeat_interval_seconds():
+    try:
+        seconds = float(getattr(settings, "CHAT_REPLY_TASK_HEARTBEAT_INTERVAL_SECONDS", 1.5) or 1.5)
+    except (TypeError, ValueError):
+        seconds = 1.5
+    return max(0.5, seconds)
+
+
+def _get_chat_reply_task_stuck_grace_seconds():
+    try:
+        seconds = float(getattr(settings, "CHAT_REPLY_TASK_STUCK_GRACE_SECONDS", 20.0) or 20.0)
+    except (TypeError, ValueError):
+        seconds = 20.0
+    return max(3.0, seconds)
+
+
+def _get_chat_reply_task_trace_max_events():
+    try:
+        limit = int(getattr(settings, "CHAT_REPLY_TASK_TRACE_MAX_EVENTS", 500) or 500)
+    except (TypeError, ValueError):
+        limit = 500
+    return max(100, limit)
+
+
+class _ChatTaskWatchdogTimeoutError(RuntimeError):
+    """聊天异步任务看门狗超时。"""
+
+
+class _ChatTaskStoppedError(RuntimeError):
+    """聊天异步任务被用户停止。"""
+
+
+def _run_companion_orchestration_with_watchdog(
+    orchestration_context,
+    timeout_seconds,
+    heartbeat_interval_seconds=1.0,
+    on_tick=None,
+    should_stop=None,
+    should_timeout=None,
+    on_stop=None,
+):
+    payload = {}
+    done_event = threading.Event()
+
+    def _target():
+        try:
+            payload["result"] = run_companion_orchestration(orchestration_context)
+        except Exception as exc:  # pragma: no cover - 由外层统一处理
+            payload["error"] = exc
+        finally:
+            done_event.set()
+
+    worker = threading.Thread(target=_target, daemon=True)
+    worker.start()
+    start_ts = time.monotonic()
+    tick_interval = max(0.5, float(heartbeat_interval_seconds or 1.0))
+
+    while not done_event.wait(timeout=tick_interval):
+        elapsed_seconds = max(0.0, time.monotonic() - start_ts)
+        if callable(on_tick):
+            on_tick(elapsed_seconds)
+        if callable(should_stop) and bool(should_stop()):
+            if callable(on_stop):
+                try:
+                    on_stop()
+                except Exception:
+                    pass
+            raise _ChatTaskStoppedError("用户已请求停止任务")
+        if callable(should_timeout):
+            timeout_payload = should_timeout(elapsed_seconds)
+            timeout_hit = False
+            timeout_reason = ""
+            if isinstance(timeout_payload, tuple):
+                timeout_hit = bool(timeout_payload[0])
+                timeout_reason = str(timeout_payload[1] or "").strip()
+            else:
+                timeout_hit = bool(timeout_payload)
+            if timeout_hit:
+                raise _ChatTaskWatchdogTimeoutError(
+                    timeout_reason
+                    or f"自主规划执行最后一步超过 {int(timeout_seconds)} 秒无响应，已触发看门狗终止。"
+                )
+        elif elapsed_seconds >= float(timeout_seconds):
+            raise _ChatTaskWatchdogTimeoutError(
+                f"自主规划执行超过 {int(timeout_seconds)} 秒未完成，已触发看门狗终止。"
+            )
+
+    elapsed_seconds = max(0.0, time.monotonic() - start_ts)
+    if "error" in payload:
+        raise payload["error"]
+    return payload.get("result") or {}, elapsed_seconds
+
+
+def _run_chat_reply_task(task_id, mindforge_strategy_override: str = "", companion_id_override: int = 0):
     """
     异步生成并分段写入助手回复，供前端轮询增量展示。
     """
@@ -596,17 +1091,45 @@ def _run_chat_reply_task(task_id):
         return
 
     try:
+        persisted_strategy = _extract_chat_task_runtime_mindforge_strategy(task)
+        persisted_companion_id = _extract_chat_task_runtime_companion_id(task)
+        effective_companion_id = 0
+        try:
+            effective_companion_id = int(companion_id_override or persisted_companion_id or 0)
+        except (TypeError, ValueError):
+            effective_companion_id = 0
+        effective_mindforge_strategy = _normalize_mindforge_strategy(
+            mindforge_strategy_override or persisted_strategy
+        )
         task.status = ChatReplyTask.STATUS_RUNNING
-        task.started_at = timezone.now()
+        if not task.started_at:
+            task.started_at = timezone.now()
         task.error_message = ""
-        process_trace = _new_process_trace()
+        task_timeout_seconds = _get_chat_reply_task_timeout_seconds()
+        heartbeat_interval_seconds = _get_chat_reply_task_heartbeat_interval_seconds()
+        is_companion_task = False
+        existing_trace = _normalize_process_trace(getattr(task, "execution_trace", {}))
+        has_existing_events = bool(existing_trace.get("events"))
+        process_trace = existing_trace if has_existing_events else _new_process_trace()
+        _touch_process_trace_runtime(
+            process_trace,
+            stage_key="boot",
+            stage_label="恢复任务" if has_existing_events else "初始化任务",
+            started_at=task.started_at,
+            timeout_seconds=task_timeout_seconds,
+            watchdog_status="running",
+        )
+        process_trace_runtime = process_trace.get("runtime") if isinstance(process_trace.get("runtime"), dict) else {}
+        process_trace_runtime["mindforge_strategy"] = effective_mindforge_strategy
+        process_trace_runtime["effective_companion_id"] = effective_companion_id if effective_companion_id > 0 else 0
+        process_trace["runtime"] = process_trace_runtime
         _append_process_trace_event_and_persist(
             task,
             process_trace,
             kind="thinking",
-            title="开始处理请求",
+            title="服务重启后恢复执行" if has_existing_events else "开始处理请求",
             status="running",
-            input_data={"task_id": task.id},
+            input_data={"task_id": task.id, "mindforge_strategy": effective_mindforge_strategy},
             extra_update_fields=["status", "started_at", "error_message"],
         )
 
@@ -621,7 +1144,32 @@ def _run_chat_reply_task(task_id):
             current_project=selected_project,
         )
         companion = _resolve_companion_for_chat_session(session_obj)
+        if (not companion) and effective_companion_id > 0:
+            companion_queryset = CompanionProfile.objects.filter(
+                id=effective_companion_id,
+                created_by=task.created_by,
+                is_active=True,
+            )
+            if selected_project:
+                companion_queryset = companion_queryset.filter(project=selected_project)
+            companion = companion_queryset.first()
+        is_companion_task = bool(companion)
         if companion:
+            companion_watchdog_seconds = _get_companion_final_step_watchdog_seconds()
+            orchestration_stop_event = threading.Event()
+            watchdog_state = {
+                "final_step_running": False,
+                "final_step_last_event_monotonic": time.monotonic(),
+            }
+            _touch_process_trace_runtime_and_persist(
+                task,
+                process_trace,
+                stage_key="planning",
+                stage_label="自主规划执行中",
+                started_at=task.started_at,
+                timeout_seconds=companion_watchdog_seconds,
+                watchdog_status="running",
+            )
             _append_process_trace_event_and_persist(
                 task,
                 process_trace,
@@ -635,18 +1183,96 @@ def _run_chat_reply_task(task_id):
                 companion=companion,
                 current_project=selected_project,
                 selected_llm_model=selected_llm_model,
+                mindforge_strategy_override=effective_mindforge_strategy,
             )
-            orchestration_result = run_companion_orchestration(orchestration_context)
+            orchestration_context["stop_checker"] = lambda: bool(orchestration_stop_event.is_set())
+            def _on_orchestration_event(event_payload):
+                if not isinstance(event_payload, dict):
+                    return
+                event_input = event_payload.get("input")
+                event_input = event_input if isinstance(event_input, dict) else {}
+                event_status = str(event_payload.get("status") or "running").strip() or "running"
+                event_title = str(event_payload.get("title") or "").strip()
+                step_type = str(event_input.get("step_type") or "").strip()
+                if step_type == "summarize" and event_status == "running":
+                    watchdog_state["final_step_running"] = True
+                if ("汇总答案" in event_title) and (event_status in {"success", "failed", "skipped"}):
+                    watchdog_state["final_step_running"] = False
+                if watchdog_state.get("final_step_running"):
+                    watchdog_state["final_step_last_event_monotonic"] = time.monotonic()
+                _append_realtime_trace_event_and_merge_token(
+                    process_trace=process_trace,
+                    event_payload={
+                        "kind": str(event_payload.get("kind") or "process"),
+                        "title": event_title or "步骤",
+                        "status": event_status,
+                        "input": event_input,
+                        "output": event_payload.get("output"),
+                        "error": str(event_payload.get("error") or ""),
+                        "token_usage": event_payload.get("token_usage"),
+                    },
+                )
+                _persist_process_trace(task, process_trace)
+
+            def _should_timeout_on_final_step(_elapsed_seconds):
+                if not watchdog_state.get("final_step_running"):
+                    return False, ""
+                idle_seconds = max(
+                    0.0,
+                    time.monotonic() - float(watchdog_state.get("final_step_last_event_monotonic") or 0.0),
+                )
+                if idle_seconds >= companion_watchdog_seconds:
+                    return (
+                        True,
+                        f"自主规划最后一步处理超过 {int(companion_watchdog_seconds)} 秒无响应，已触发看门狗终止。",
+                    )
+                return False, ""
+
+            orchestration_context["event_callback"] = _on_orchestration_event
+            orchestration_result, _ = _run_companion_orchestration_with_watchdog(
+                orchestration_context=orchestration_context,
+                timeout_seconds=companion_watchdog_seconds,
+                heartbeat_interval_seconds=heartbeat_interval_seconds,
+                on_tick=lambda _elapsed: _touch_process_trace_runtime_and_persist(
+                    task,
+                    process_trace,
+                    stage_key="planning",
+                    stage_label="自主规划执行中",
+                    started_at=task.started_at,
+                    timeout_seconds=companion_watchdog_seconds,
+                    watchdog_status="running",
+                ),
+                should_stop=lambda: bool(
+                    ChatReplyTask.objects.filter(id=task.id, stop_requested=True).exists()
+                ),
+                should_timeout=_should_timeout_on_final_step,
+                on_stop=lambda: orchestration_stop_event.set(),
+            )
             orchestration_token_usage = _normalize_token_usage(orchestration_result.get("token_usage"))
             planner_token_usage = _normalize_token_usage(orchestration_result.get("planner_token_usage"))
-            _set_process_trace_token_usage(process_trace, orchestration_token_usage)
+            plan_payload = orchestration_result.get("plan") if isinstance(orchestration_result.get("plan"), dict) else {}
+            planner_result_payload = {
+                "plan": plan_payload,
+                "plan_step_count": len(plan_payload.get("steps") or []) if isinstance(plan_payload.get("steps"), list) else 0,
+                "token_usage": planner_token_usage,
+            }
+            if orchestration_token_usage:
+                _set_process_trace_token_usage(process_trace, orchestration_token_usage)
             _append_process_trace_event_and_persist(
                 task,
                 process_trace,
                 kind="llm_call",
                 title="大模型规划完成",
                 status="success",
-                output_data={"token_usage": planner_token_usage},
+                output_data=planner_result_payload,
+                token_usage=planner_token_usage,
+            )
+            _finalize_last_running_process_trace_event_and_persist(
+                task=task,
+                process_trace=process_trace,
+                title="开始大模型规划",
+                final_status="success",
+                output_data=planner_result_payload,
                 token_usage=planner_token_usage,
             )
             _append_process_trace_event_and_persist(
@@ -664,25 +1290,59 @@ def _run_chat_reply_task(task_id):
                 error=str(orchestration_result.get("error") or ""),
                 token_usage=orchestration_token_usage,
             )
+            streamed_trace_events = bool(orchestration_result.get("streamed_trace_events"))
             for step in orchestration_result.get("step_results") or []:
                 step_output = step.get("output") if isinstance(step, dict) else {}
                 step_token_usage = _normalize_token_usage(
                     step_output.get("token_usage") if isinstance(step_output, dict) else {}
                 )
                 step_executor = str(step.get("executor") or "").strip()
+                step_title = _build_step_trace_title(
+                    step=step if isinstance(step, dict) else {},
+                    step_executor=step_executor,
+                    step_output=step_output if isinstance(step_output, dict) else {},
+                )
                 step_kind = "thinking"
                 if step_executor.startswith("toolRunner"):
                     step_kind = "code_call"
                 elif step_executor.startswith("mindforgeRunner") or step_executor == "answerSynthesizer":
                     step_kind = "llm_call"
+                step_trace_events = step.get("trace") if isinstance(step, dict) else []
+                if (not streamed_trace_events) and isinstance(step_trace_events, list):
+                    for index, event in enumerate(step_trace_events, start=1):
+                        if not isinstance(event, dict):
+                            continue
+                        event_kind = str(event.get("kind") or step_kind).strip() or step_kind
+                        event_title = str(event.get("title") or "").strip() or f"{step_title} 子事件 {index}"
+                        event_status = str(event.get("status") or step.get("status") or "success").strip() or "success"
+                        event_input = event.get("input")
+                        event_output = event.get("output")
+                        event_error = str(event.get("error") or "").strip()
+                        _append_process_trace_event_and_persist(
+                            task,
+                            process_trace,
+                            kind=event_kind,
+                            title=event_title,
+                            status=event_status,
+                            input_data=event_input,
+                            output_data=event_output,
+                            error=event_error,
+                        )
+                step_input_payload = {"executor": step_executor, "step_type": step.get("step_type")}
+                if isinstance(step_output, dict) and step_executor.startswith("mindforgeRunner"):
+                    step_input_payload["mindforge_strategy"] = str(step_output.get("mindforge_strategy") or "")
+                    step_input_payload["mindforge_sub_strategies"] = step_output.get("mindforge_sub_strategies") or []
                 _append_process_trace_event_and_persist(
                     task,
                     process_trace,
                     kind=step_kind,
-                    title=f"步骤 {step.get('step_id') or ''}",
+                    title=step_title,
                     status=str(step.get("status") or "success"),
-                    input_data={"executor": step_executor, "step_type": step.get("step_type")},
-                    output_data=step_output,
+                    input_data=step_input_payload,
+                    output_data={
+                        "duration_ms": int(step.get("duration_ms") or 0),
+                        "result": step_output,
+                    },
                     error=str(step.get("error") or ""),
                     token_usage=step_token_usage,
                 )
@@ -702,6 +1362,15 @@ def _run_chat_reply_task(task_id):
                 full_text = str(orchestration_result.get("error") or "伙伴协同执行失败，请稍后重试。")
             full_text = _sanitize_user_facing_response_text(full_text)
         else:
+            _touch_process_trace_runtime_and_persist(
+                task,
+                process_trace,
+                stage_key="llm_reply",
+                stage_label="大模型回复生成中",
+                started_at=task.started_at,
+                timeout_seconds=task_timeout_seconds,
+                watchdog_status="running",
+            )
             _append_process_trace_event_and_persist(
                 task,
                 process_trace,
@@ -724,8 +1393,18 @@ def _run_chat_reply_task(task_id):
                 status="success" if bool(chat_result.get("success")) else "failed",
                 output_data={
                     "has_response": bool(str(chat_result.get("response") or "").strip()),
+                    "response_preview": _truncate_trace_text(chat_result.get("response"), max_chars=1800),
                     "token_usage": chat_token_usage,
                 },
+                error=str(chat_result.get("error") or ""),
+                token_usage=chat_token_usage,
+            )
+            _finalize_last_running_process_trace_event_and_persist(
+                task=task,
+                process_trace=process_trace,
+                title="调用大模型生成回复",
+                final_status="success" if bool(chat_result.get("success")) else "failed",
+                output_data={"token_usage": chat_token_usage},
                 error=str(chat_result.get("error") or ""),
                 token_usage=chat_token_usage,
             )
@@ -733,23 +1412,188 @@ def _run_chat_reply_task(task_id):
             if not full_text:
                 full_text = str(chat_result.get("error") or "助手暂时无法回复，请稍后重试。")
             full_text = _sanitize_user_facing_response_text(full_text)
+        interaction_request, full_text = _extract_interaction_request_from_response_text(full_text)
+        if not interaction_request:
+            _set_process_trace_interaction(
+                process_trace,
+                status="idle",
+                request_data={},
+                response_data={},
+            )
 
         assistant_message = task.assistant_message
         if not assistant_message:
             task.status = ChatReplyTask.STATUS_FAILED
             task.error_message = "未找到助手占位消息。"
             task.finished_at = timezone.now()
+            _finalize_last_running_process_trace_event_and_persist(
+                task=task,
+                process_trace=process_trace,
+                title="开始处理请求",
+                final_status="failed",
+                error=task.error_message,
+                extra_update_fields=["status", "error_message", "finished_at"],
+            )
             task.save(update_fields=["status", "error_message", "finished_at", "updated_at"])
             return
+
+        if interaction_request:
+            interaction_request["interaction_id"] = f"task-{task.id}-interaction-{int(time.time() * 1000)}"
+            waiting_hint = str(interaction_request.get("title") or "需要你补充交互输入后继续执行。").strip()
+            if interaction_request.get("description"):
+                waiting_hint = f"{waiting_hint}\n\n{str(interaction_request.get('description') or '').strip()}"
+            _set_process_trace_interaction(
+                process_trace,
+                status="pending",
+                request_data=interaction_request,
+                response_data={},
+            )
+            assistant_message.content = waiting_hint
+            assistant_message.save(update_fields=["content"])
+            _touch_process_trace_runtime_and_persist(
+                task,
+                process_trace,
+                stage_key="waiting_user_input",
+                stage_label="等待用户交互输入",
+                started_at=task.started_at,
+                timeout_seconds=task_timeout_seconds,
+                watchdog_status="running",
+            )
+            _append_process_trace_event_and_persist(
+                task,
+                process_trace,
+                kind="process",
+                title="等待用户交互输入",
+                status="running",
+                output_data={
+                    "interaction_type": interaction_request.get("type"),
+                    "interaction_title": interaction_request.get("title"),
+                },
+            )
+            interaction_value, refreshed_trace = _wait_for_task_interaction_response(
+                task,
+                interaction_id=interaction_request.get("interaction_id"),
+                started_at=task.started_at,
+                timeout_seconds=task_timeout_seconds,
+                heartbeat_interval_seconds=heartbeat_interval_seconds,
+            )
+            process_trace = refreshed_trace
+            if bool(interaction_request.get("required", True)) and not interaction_value:
+                raise RuntimeError("交互输入为空，任务无法继续。")
+            response_value_for_trace = interaction_value
+            if bool(interaction_request.get("mask_value", False)):
+                response_value_for_trace = _mask_interaction_value(interaction_value)
+            _set_process_trace_interaction(
+                process_trace,
+                status="answered",
+                request_data=interaction_request,
+                response_data={
+                    "submitted": True,
+                    "value": response_value_for_trace,
+                    "submitted_at": timezone.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+            _finalize_last_running_process_trace_event_and_persist(
+                task=task,
+                process_trace=process_trace,
+                title="等待用户交互输入",
+                final_status="success",
+                output_data={
+                    "interaction_type": interaction_request.get("type"),
+                    "submitted": True,
+                },
+            )
+            _touch_process_trace_runtime_and_persist(
+                task,
+                process_trace,
+                stage_key="interaction_resume",
+                stage_label="交互输入已提交，继续生成回复",
+                started_at=task.started_at,
+                timeout_seconds=task_timeout_seconds,
+                watchdog_status="running",
+            )
+            _append_process_trace_event_and_persist(
+                task,
+                process_trace,
+                kind="llm_call",
+                title="基于交互输入继续生成回复",
+                status="running",
+                input_data={
+                    "interaction_type": interaction_request.get("type"),
+                    "interaction_title": interaction_request.get("title"),
+                },
+            )
+            interaction_resume_prompt = (
+                f"用户任务：{str(task.user_message.content or '').strip()}\n\n"
+                f"你在本轮提出的交互项：{str(interaction_request.get('title') or '').strip()}\n"
+                f"用户补充输入：{interaction_value}\n\n"
+                "请基于以上交互补充继续完成同一轮回复。"
+            )
+            resume_history = list(conversation_history or [])
+            resume_history.append({"role": "assistant", "content": waiting_hint})
+            resume_history.append({"role": "user", "content": interaction_resume_prompt})
+            resume_chat_result = analyzer.chat(
+                conversation_history=resume_history,
+                llm_model=selected_llm_model,
+            )
+            resume_text = str(resume_chat_result.get("response") or "").strip()
+            if not resume_text:
+                resume_text = str(resume_chat_result.get("error") or "收到交互输入，但生成最终回复失败。")
+            full_text = _sanitize_user_facing_response_text(resume_text)
+            resume_token_usage = _normalize_token_usage(resume_chat_result.get("token_usage"))
+            _set_process_trace_token_usage(process_trace, resume_token_usage, merge=True)
+            _finalize_last_running_process_trace_event_and_persist(
+                task=task,
+                process_trace=process_trace,
+                title="基于交互输入继续生成回复",
+                final_status="success" if bool(resume_chat_result.get("success")) else "failed",
+                output_data={"token_usage": resume_token_usage},
+                error=str(resume_chat_result.get("error") or ""),
+                token_usage=resume_token_usage,
+            )
+            _set_process_trace_interaction(
+                process_trace,
+                status="completed",
+                request_data=interaction_request,
+                response_data={
+                    "submitted": True,
+                    "value": response_value_for_trace,
+                    "submitted_at": timezone.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
 
         chunk_size = _get_chat_reply_emit_chunk_size()
         emit_interval = _get_chat_reply_emit_interval_seconds()
         cursor = 0
+        _touch_process_trace_runtime_and_persist(
+            task,
+            process_trace,
+            stage_key="streaming",
+            stage_label="写回回复内容",
+            started_at=task.started_at,
+            timeout_seconds=task_timeout_seconds,
+            watchdog_status="running",
+        )
         while cursor < len(full_text):
             task.refresh_from_db(fields=["stop_requested", "status"])
             if task.stop_requested:
                 task.status = ChatReplyTask.STATUS_STOPPED
                 task.finished_at = timezone.now()
+                _touch_process_trace_runtime(
+                    process_trace,
+                    stage_key="stopped",
+                    stage_label="用户停止",
+                    started_at=task.started_at,
+                    timeout_seconds=task_timeout_seconds,
+                    watchdog_status="stopped",
+                )
+                _finalize_last_running_process_trace_event_and_persist(
+                    task=task,
+                    process_trace=process_trace,
+                    title="开始处理请求",
+                    final_status="stopped",
+                    extra_update_fields=["status", "finished_at"],
+                )
                 _append_process_trace_event_and_persist(
                     task,
                     process_trace,
@@ -760,14 +1604,46 @@ def _run_chat_reply_task(task_id):
                 )
                 return
 
+            elapsed_seconds = max(0.0, (timezone.now() - task.started_at).total_seconds()) if task.started_at else 0.0
+            if (not is_companion_task) and elapsed_seconds >= task_timeout_seconds:
+                raise _ChatTaskWatchdogTimeoutError(
+                    f"任务执行超过 {int(task_timeout_seconds)} 秒未完成，已自动终止。"
+                )
+
             cursor = min(len(full_text), cursor + chunk_size)
             assistant_message.content = full_text[:cursor]
             assistant_message.save(update_fields=["content"])
+            _touch_process_trace_runtime_and_persist(
+                task,
+                process_trace,
+                stage_key="streaming",
+                stage_label="写回回复内容",
+                started_at=task.started_at,
+                timeout_seconds=task_timeout_seconds,
+                watchdog_status="running",
+            )
             if cursor < len(full_text):
                 time.sleep(emit_interval)
 
         task.status = ChatReplyTask.STATUS_COMPLETED
         task.finished_at = timezone.now()
+        _touch_process_trace_runtime(
+            process_trace,
+            stage_key="completed",
+            stage_label="执行完成",
+            started_at=task.started_at,
+            timeout_seconds=task_timeout_seconds,
+            watchdog_status="completed",
+        )
+        _finalize_last_running_process_trace_event_and_persist(
+            task=task,
+            process_trace=process_trace,
+            title="开始处理请求",
+            final_status="success",
+            output_data={"content_length": len(full_text)},
+            token_usage=_normalize_token_usage(process_trace.get("token_usage")),
+            extra_update_fields=["status", "finished_at"],
+        )
         _append_process_trace_event_and_persist(
             task,
             process_trace,
@@ -781,11 +1657,65 @@ def _run_chat_reply_task(task_id):
             token_usage=_normalize_token_usage(process_trace.get("token_usage")),
             extra_update_fields=["status", "finished_at"],
         )
+    except (_ChatTaskStoppedError, OrchestrationStoppedError):
+        task.status = ChatReplyTask.STATUS_STOPPED
+        task.finished_at = timezone.now()
+        trace_payload = _normalize_process_trace(getattr(task, "execution_trace", {}))
+        _touch_process_trace_runtime(
+            trace_payload,
+            stage_key="stopped",
+            stage_label="用户停止",
+            started_at=task.started_at,
+            timeout_seconds=(
+                _get_companion_final_step_watchdog_seconds()
+                if is_companion_task
+                else _get_chat_reply_task_timeout_seconds()
+            ),
+            watchdog_status="stopped",
+        )
+        _finalize_last_running_process_trace_event_and_persist(
+            task=task,
+            process_trace=trace_payload,
+            title="开始处理请求",
+            final_status="stopped",
+            extra_update_fields=["status", "finished_at"],
+        )
+        _append_process_trace_event_and_persist(
+            task,
+            trace_payload,
+            kind="result",
+            title="用户停止任务",
+            status="stopped",
+            extra_update_fields=["status", "finished_at"],
+        )
+        if task.assistant_message and _is_placeholder_assistant_content(task.assistant_message.content):
+            task.assistant_message.content = "已停止本次回复。"
+            task.assistant_message.save(update_fields=["content"])
     except Exception as exc:
         task.error_message = str(exc)
         task.status = ChatReplyTask.STATUS_FAILED
         task.finished_at = timezone.now()
         trace_payload = _normalize_process_trace(getattr(task, "execution_trace", {}))
+        _touch_process_trace_runtime(
+            trace_payload,
+            stage_key="failed",
+            stage_label="执行失败",
+            started_at=task.started_at,
+            timeout_seconds=(
+                _get_companion_final_step_watchdog_seconds()
+                if is_companion_task
+                else _get_chat_reply_task_timeout_seconds()
+            ),
+            watchdog_status="timeout" if isinstance(exc, _ChatTaskWatchdogTimeoutError) else "failed",
+        )
+        _finalize_last_running_process_trace_event_and_persist(
+            task=task,
+            process_trace=trace_payload,
+            title="开始处理请求",
+            final_status="failed",
+            error=str(exc),
+            extra_update_fields=["error_message", "status", "finished_at"],
+        )
         _append_process_trace_event_and_persist(
             task,
             trace_payload,
@@ -795,10 +1725,11 @@ def _run_chat_reply_task(task_id):
             error=str(exc),
             extra_update_fields=["error_message", "status", "finished_at"],
         )
-        if task.assistant_message and not str(task.assistant_message.content or "").strip():
+        if task.assistant_message and _is_placeholder_assistant_content(task.assistant_message.content):
             task.assistant_message.content = "助手暂时无法回复，请稍后重试。"
             task.assistant_message.save(update_fields=["content"])
     finally:
+        _clear_task_interaction_response_cache(task_id)
         close_old_connections()
 
 
@@ -1016,6 +1947,132 @@ def _get_ui_theme(request):
     return theme
 
 
+def _parse_bool_flag(raw_value, default=True):
+    text = str(raw_value or "").strip().lower()
+    if not text:
+        return bool(default)
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _get_permission_restriction_enabled():
+    try:
+        return SystemRuntimeSetting.get_bool(PERMISSION_RESTRICTION_SETTING_KEY, default=True)
+    except (OperationalError, ProgrammingError):
+        return True
+    except Exception:
+        return True
+
+
+def _set_permission_restriction_enabled(enabled: bool) -> bool:
+    try:
+        SystemRuntimeSetting.set_bool(
+            key=PERMISSION_RESTRICTION_SETTING_KEY,
+            enabled=bool(enabled),
+            description="系统设置：伙伴权限限制总开关（调试阶段可关闭）",
+        )
+        return True
+    except (OperationalError, ProgrammingError):
+        return False
+    except Exception:
+        return False
+
+
+def _set_companion_final_step_watchdog_seconds(seconds: float) -> bool:
+    try:
+        normalized = max(10.0, float(seconds))
+    except (TypeError, ValueError):
+        return False
+    try:
+        SystemRuntimeSetting.set_float(
+            key=COMPANION_FINAL_STEP_WATCHDOG_SECONDS_SETTING_KEY,
+            value=normalized,
+            description="系统设置：自主规划最后一步无响应看门狗阈值（秒）",
+        )
+        return True
+    except (OperationalError, ProgrammingError):
+        return False
+    except Exception:
+        return False
+
+
+def _parse_runtime_heartbeat_ts(raw_value):
+    parsed = _parse_process_trace_ts(raw_value)
+    if not isinstance(parsed, datetime):
+        return None
+    return parsed
+
+
+def _current_process_trace_ts_text():
+    return timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _parse_process_trace_ts(raw_value):
+    text = str(raw_value or "").strip()
+    if not text:
+        return None
+    iso_candidate = text
+    if iso_candidate.endswith("Z"):
+        iso_candidate = f"{iso_candidate[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(iso_candidate)
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        try:
+            parsed = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+    if not isinstance(parsed, datetime):
+        return None
+    if not timezone.is_naive(parsed):
+        return timezone.localtime(parsed)
+    current_tz = timezone.get_current_timezone()
+    local_candidate = timezone.make_aware(parsed, current_tz)
+    utc_candidate = timezone.make_aware(parsed, dt_timezone.utc)
+    now_ts = timezone.now()
+    local_delta = abs((now_ts - local_candidate).total_seconds())
+    utc_delta = abs((now_ts - utc_candidate).total_seconds())
+    chosen = utc_candidate if utc_delta < local_delta else local_candidate
+    return timezone.localtime(chosen)
+
+
+def _normalize_process_trace_ts_text(raw_value):
+    parsed = _parse_process_trace_ts(raw_value)
+    if not isinstance(parsed, datetime):
+        return str(raw_value or "").strip()
+    return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _build_companion_permission_scope(companion, permission_restriction_enabled: bool):
+    enabled_toolset_items = list_toolsets(keyword="", selected_os="all", include_disabled=False)
+    enabled_toolset_keys = [
+        str(item.get("name") or "").strip()
+        for item in enabled_toolset_items
+        if str(item.get("name") or "").strip()
+    ]
+    companion_toolsets = filter_enabled_toolsets(companion.get_allowed_toolsets())
+    runtime_toolsets = companion_toolsets or enabled_toolset_keys
+    if not permission_restriction_enabled:
+        return {
+            "allowed_toolsets": runtime_toolsets,
+            "allowed_agent_modules": list(ALLOWED_AGENT_MODULES.keys()),
+            "allowed_control_modules": list(ALLOWED_CONTROL_MODULES.keys()),
+            "allowed_control_components": [],
+            "allowed_control_functions": [],
+        }
+    return {
+        "allowed_toolsets": runtime_toolsets,
+        "allowed_agent_modules": companion.get_allowed_agent_modules(),
+        "allowed_control_modules": companion.get_allowed_control_modules(),
+        "allowed_control_components": companion.get_allowed_control_components(),
+        "allowed_control_functions": companion.get_allowed_control_functions(),
+    }
+
+
 def _set_ui_theme(request, theme):
     normalized = str(theme or "").strip().lower()
     if normalized not in THEME_LABELS:
@@ -1047,8 +2104,51 @@ def _get_chat_orchestration_meta(task_id):
         return dict(CHAT_ORCHESTRATION_META.get(int(task_id), {}))
 
 
+def _set_task_interaction_response_cache(task_id, interaction_id, response_value):
+    cache_key = f"{int(task_id)}::{str(interaction_id or '').strip()}"
+    if not cache_key.endswith("::"):
+        with CHAT_INTERACTION_RESPONSE_CACHE_LOCK:
+            CHAT_INTERACTION_RESPONSE_CACHE[cache_key] = str(response_value or "")
+
+
+def _pop_task_interaction_response_cache(task_id, interaction_id):
+    cache_key = f"{int(task_id)}::{str(interaction_id or '').strip()}"
+    with CHAT_INTERACTION_RESPONSE_CACHE_LOCK:
+        return CHAT_INTERACTION_RESPONSE_CACHE.pop(cache_key, None)
+
+
+def _clear_task_interaction_response_cache(task_id):
+    prefix = f"{int(task_id)}::"
+    with CHAT_INTERACTION_RESPONSE_CACHE_LOCK:
+        keys_to_delete = [key for key in CHAT_INTERACTION_RESPONSE_CACHE.keys() if str(key).startswith(prefix)]
+        for key in keys_to_delete:
+            CHAT_INTERACTION_RESPONSE_CACHE.pop(key, None)
+
+
+def _mask_interaction_value(value):
+    text = str(value or "")
+    if not text:
+        return ""
+    return "*" * min(max(len(text), 6), 32)
+
+
 def _new_process_trace():
-    return {"events": [], "token_usage": {}}
+    return {
+        "events": [],
+        "token_usage": {},
+        "interaction": {},
+        "runtime": {
+            "stage_key": "",
+            "stage_label": "",
+            "heartbeat_ts": "",
+            "last_event_ts": "",
+            "last_event_title": "",
+            "elapsed_ms": 0,
+            "timeout_seconds": 0,
+            "remaining_seconds": 0,
+            "watchdog_status": "idle",
+        },
+    }
 
 
 def _normalize_token_usage(raw_usage):
@@ -1067,7 +2167,11 @@ def _normalize_token_usage(raw_usage):
         return None
 
     prompt_tokens = _to_int(raw_usage.get("prompt_tokens"))
+    if prompt_tokens is None:
+        prompt_tokens = _to_int(raw_usage.get("input_tokens"))
     completion_tokens = _to_int(raw_usage.get("completion_tokens"))
+    if completion_tokens is None:
+        completion_tokens = _to_int(raw_usage.get("output_tokens"))
     total_tokens = _to_int(raw_usage.get("total_tokens"))
     if total_tokens is None and (prompt_tokens is not None or completion_tokens is not None):
         total_tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
@@ -1078,6 +2182,16 @@ def _normalize_token_usage(raw_usage):
         "completion_tokens": int(completion_tokens or 0),
         "total_tokens": int(total_tokens or 0),
     }
+
+
+def _truncate_trace_text(value, max_chars=1800):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    limit = max(100, int(max_chars or 1800))
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...(truncated)"
 
 
 def _merge_token_usage(base_usage, add_usage):
@@ -1100,6 +2214,100 @@ def _set_process_trace_token_usage(process_trace, usage, merge=False):
         process_trace["token_usage"] = _merge_token_usage(process_trace.get("token_usage"), usage)
     else:
         process_trace["token_usage"] = _normalize_token_usage(usage)
+
+
+def _extract_trace_event_token_usage(event_payload):
+    if not isinstance(event_payload, dict):
+        return {}
+    candidates = []
+    candidates.append(event_payload.get("token_usage"))
+    candidates.append(event_payload.get("usage"))
+    output_payload = event_payload.get("output")
+    if isinstance(output_payload, dict):
+        candidates.append(output_payload.get("token_usage"))
+        candidates.append(output_payload.get("usage"))
+        result_payload = output_payload.get("result")
+        if isinstance(result_payload, dict):
+            candidates.append(result_payload.get("token_usage"))
+            candidates.append(result_payload.get("usage"))
+        candidates.append(output_payload)
+    for candidate in candidates:
+        normalized = _normalize_token_usage(candidate)
+        if normalized:
+            return normalized
+    return {}
+
+
+def _append_realtime_trace_event_and_merge_token(process_trace, event_payload):
+    if not isinstance(process_trace, dict) or not isinstance(event_payload, dict):
+        return
+    event_token_usage = _extract_trace_event_token_usage(event_payload)
+    _append_process_trace_event(
+        process_trace=process_trace,
+        kind=str(event_payload.get("kind") or "process"),
+        title=str(event_payload.get("title") or "步骤"),
+        status=str(event_payload.get("status") or "running"),
+        input_data=event_payload.get("input"),
+        output_data=event_payload.get("output"),
+        error=str(event_payload.get("error") or ""),
+        token_usage=event_token_usage,
+    )
+    if event_token_usage:
+        _set_process_trace_token_usage(process_trace, event_token_usage, merge=True)
+
+
+def _touch_process_trace_runtime(
+    process_trace,
+    *,
+    stage_key="",
+    stage_label="",
+    started_at=None,
+    timeout_seconds=0,
+    watchdog_status="running",
+):
+    if not isinstance(process_trace, dict):
+        return {}
+    runtime = process_trace.get("runtime")
+    if not isinstance(runtime, dict):
+        runtime = {}
+    runtime["stage_key"] = str(stage_key or runtime.get("stage_key") or "").strip()
+    runtime["stage_label"] = str(stage_label or runtime.get("stage_label") or "").strip()
+    runtime["heartbeat_ts"] = _current_process_trace_ts_text()
+    timeout_value = float(timeout_seconds or runtime.get("timeout_seconds") or 0.0)
+    runtime["timeout_seconds"] = max(0.0, timeout_value)
+    elapsed_ms = 0
+    if started_at:
+        elapsed_ms = max(0, int((timezone.now() - started_at).total_seconds() * 1000))
+    runtime["elapsed_ms"] = elapsed_ms
+    if runtime["timeout_seconds"] > 0:
+        runtime["remaining_seconds"] = max(0.0, runtime["timeout_seconds"] - elapsed_ms / 1000.0)
+    else:
+        runtime["remaining_seconds"] = 0.0
+    runtime["watchdog_status"] = str(watchdog_status or runtime.get("watchdog_status") or "running")
+    process_trace["runtime"] = runtime
+    return runtime
+
+
+def _touch_process_trace_runtime_and_persist(
+    task,
+    process_trace,
+    *,
+    stage_key="",
+    stage_label="",
+    started_at=None,
+    timeout_seconds=0,
+    watchdog_status="running",
+    extra_update_fields=None,
+):
+    _touch_process_trace_runtime(
+        process_trace,
+        stage_key=stage_key,
+        stage_label=stage_label,
+        started_at=started_at,
+        timeout_seconds=timeout_seconds,
+        watchdog_status=watchdog_status,
+    )
+    _persist_process_trace(task, process_trace, extra_update_fields=extra_update_fields)
 
 
 def _sanitize_user_facing_response_text(raw_text):
@@ -1127,6 +2335,255 @@ def _sanitize_user_facing_response_text(raw_text):
     return text
 
 
+def _normalize_interaction_options(raw_options):
+    normalized = []
+    if not isinstance(raw_options, list):
+        return normalized
+    for item in raw_options:
+        if isinstance(item, dict):
+            value = str(item.get("value") or item.get("id") or item.get("key") or "").strip()
+            label = str(item.get("label") or value).strip()
+            option_id = str(item.get("id") or value).strip()
+        else:
+            value = str(item or "").strip()
+            label = value
+            option_id = value
+        if not value:
+            continue
+        normalized.append({"id": option_id or value, "value": value, "label": label or value})
+    return normalized
+
+
+def _normalize_interaction_request(raw_request):
+    if not isinstance(raw_request, dict):
+        return None
+    interaction_type = str(raw_request.get("type") or raw_request.get("interaction_type") or "").strip().lower()
+    if interaction_type not in {INTERACTION_TYPE_PASSWORD, INTERACTION_TYPE_SINGLE_SELECT, INTERACTION_TYPE_TEXT}:
+        return None
+    title = str(raw_request.get("title") or raw_request.get("prompt") or "").strip()
+    description = str(raw_request.get("description") or raw_request.get("reason") or "").strip()
+    if not title:
+        return None
+    options = []
+    if interaction_type == INTERACTION_TYPE_SINGLE_SELECT:
+        options = _normalize_interaction_options(
+            raw_request.get("options")
+            or raw_request.get("choices")
+            or raw_request.get("alternatives")
+        )
+        if not options:
+            return None
+    raw_meta = raw_request.get("meta")
+    meta = raw_meta if isinstance(raw_meta, dict) else {}
+    request_payload = {
+        "interaction_id": "",
+        "type": interaction_type,
+        "title": title,
+        "description": description,
+        "placeholder": str(raw_request.get("placeholder") or "").strip(),
+        "required": bool(raw_request.get("required", True)),
+        "submit_label": str(raw_request.get("submit_label") or "提交").strip() or "提交",
+        "options": options,
+        "mask_value": bool(raw_request.get("mask_value", interaction_type == INTERACTION_TYPE_PASSWORD)),
+        "meta": meta,
+    }
+    return request_payload
+
+
+def _extract_json_object_text(raw_text: str) -> str:
+    text = str(raw_text or "").strip()
+    if not text:
+        return ""
+    if text.startswith("{") and text.endswith("}"):
+        return text
+    fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text, re.IGNORECASE)
+    if fenced:
+        return str(fenced.group(1) or "").strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if 0 <= start < end:
+        return text[start : end + 1].strip()
+    return ""
+
+
+def _extract_legacy_interaction_request(raw_text: str):
+    text = str(raw_text or "").strip()
+    if not text:
+        return None
+    json_text = _extract_json_object_text(text)
+    if not json_text:
+        return None
+    parsed = None
+    try:
+        parsed = json.loads(json_text)
+    except Exception:
+        try:
+            parsed = ast.literal_eval(json_text)
+        except Exception:
+            parsed = None
+    if not isinstance(parsed, dict):
+        return None
+    reason = str(parsed.get("reason") or "").strip()
+    alternative_plan = str(parsed.get("alternative_plan") or "").strip()
+    if not reason and not alternative_plan:
+        return None
+    option_keys = re.findall(r"['\"]([a-zA-Z0-9_\\-]+)['\"]", alternative_plan)
+    normalized_keys = []
+    for key in option_keys:
+        value = str(key or "").strip().lower()
+        if value and value not in normalized_keys:
+            normalized_keys.append(value)
+    option_label_map = {
+        "install": "安装 cursor-cli 后重试",
+        "relax": "放宽约束并继续执行",
+        "retry": "立即重试当前路径",
+    }
+    options = []
+    for key in normalized_keys:
+        options.append(
+            {
+                "id": key,
+                "value": key,
+                "label": option_label_map.get(key, key),
+            }
+        )
+    if not options:
+        return None
+    return {
+        "type": INTERACTION_TYPE_SINGLE_SELECT,
+        "title": "请选择下一步处理方式",
+        "description": f"{reason}\n\n{alternative_plan}".strip(),
+        "required": True,
+        "submit_label": "提交选择",
+        "options": options,
+        "meta": {
+            "source": "legacy_text_payload",
+            "trigger_step_id": str(parsed.get("trigger_step_id") or "").strip(),
+            "mindforge_strategy": str(parsed.get("mindforge_strategy") or "").strip(),
+            "reason": reason,
+            "alternative_plan": alternative_plan,
+        },
+    }
+
+
+def _extract_interaction_request_from_response_text(raw_text):
+    text = str(raw_text or "").strip()
+    if not text:
+        return None, ""
+    matched = INTERACTION_PROTOCOL_BLOCK_PATTERN.search(text)
+    if matched:
+        block_text = str(matched.group(1) or "").strip()
+        if block_text:
+            try:
+                parsed = json.loads(block_text)
+            except (TypeError, ValueError):
+                parsed = None
+            normalized_request = _normalize_interaction_request(parsed) if isinstance(parsed, dict) else None
+            if normalized_request:
+                remaining = f"{text[:matched.start()]}{text[matched.end():]}".strip()
+                return normalized_request, remaining
+    legacy_request = _extract_legacy_interaction_request(text)
+    if legacy_request:
+        normalized_legacy = _normalize_interaction_request(legacy_request)
+        if normalized_legacy:
+            return normalized_legacy, text
+    return None, text
+
+
+def _set_process_trace_interaction(
+    process_trace,
+    *,
+    status="pending",
+    request_data=None,
+    response_data=None,
+):
+    if not isinstance(process_trace, dict):
+        return
+    current = process_trace.get("interaction")
+    if not isinstance(current, dict):
+        current = {}
+    interaction_request = request_data if isinstance(request_data, dict) else current.get("request", {})
+    interaction_response = response_data if isinstance(response_data, dict) else current.get("response", {})
+    process_trace["interaction"] = {
+        "status": str(status or "").strip() or "pending",
+        "request": interaction_request if isinstance(interaction_request, dict) else {},
+        "response": interaction_response if isinstance(interaction_response, dict) else {},
+        "updated_at": timezone.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def _build_task_interaction_payload(process_trace):
+    if not isinstance(process_trace, dict):
+        return {}
+    interaction = process_trace.get("interaction")
+    if not isinstance(interaction, dict):
+        return {}
+    request_data = interaction.get("request") if isinstance(interaction.get("request"), dict) else {}
+    interaction_id = str(request_data.get("interaction_id") or "").strip()
+    if not interaction_id:
+        return {}
+    status = str(interaction.get("status") or "").strip() or "pending"
+    response_data = interaction.get("response") if isinstance(interaction.get("response"), dict) else {}
+    request_meta = request_data.get("meta") if isinstance(request_data.get("meta"), dict) else {}
+    prompt_text = str(request_data.get("title") or "").strip() or "请先完成交互输入后继续"
+    return {
+        "schema_version": "v1",
+        "status": status,
+        "pending": status == "pending",
+        "prompt": f"等待交互输入：{prompt_text}" if status == "pending" else "",
+        "request": {
+            "interaction_id": interaction_id,
+            "type": str(request_data.get("type") or "").strip(),
+            "title": str(request_data.get("title") or "").strip(),
+            "description": str(request_data.get("description") or "").strip(),
+            "placeholder": str(request_data.get("placeholder") or "").strip(),
+            "required": bool(request_data.get("required", True)),
+            "submit_label": str(request_data.get("submit_label") or "提交").strip() or "提交",
+            "options": _normalize_interaction_options(request_data.get("options")),
+            "mask_value": bool(request_data.get("mask_value", False)),
+            "meta": request_meta,
+        },
+        "response": response_data if isinstance(response_data, dict) else {},
+        "updated_at": str(interaction.get("updated_at") or "").strip(),
+    }
+
+
+def _wait_for_task_interaction_response(
+    task,
+    *,
+    interaction_id,
+    started_at,
+    timeout_seconds,
+    heartbeat_interval_seconds,
+):
+    waited_seconds = 0.0
+    interval = max(0.5, float(heartbeat_interval_seconds or 1.0))
+    while True:
+        task.refresh_from_db(fields=["stop_requested", "execution_trace", "started_at", "status"])
+        if task.stop_requested:
+            raise RuntimeError("用户已请求停止任务")
+        raw_value = _pop_task_interaction_response_cache(task.id, interaction_id)
+        normalized_trace = _normalize_process_trace(task.execution_trace)
+        if raw_value is not None:
+            return str(raw_value or "").strip(), normalized_trace
+        interaction_payload = _build_task_interaction_payload(normalized_trace)
+        if interaction_payload and not interaction_payload.get("pending"):
+            response_data = interaction_payload.get("response") if isinstance(interaction_payload.get("response"), dict) else {}
+            return str(response_data.get("value") or "").strip(), normalized_trace
+        elapsed_seconds = max(
+            0.0,
+            (timezone.now() - (started_at or task.started_at or timezone.now())).total_seconds(),
+        )
+        if elapsed_seconds >= float(timeout_seconds or 0):
+            raise _ChatTaskWatchdogTimeoutError(
+                f"任务执行超过 {int(timeout_seconds)} 秒未完成，已自动终止。"
+            )
+        waited_seconds += interval
+        if waited_seconds >= interval:
+            waited_seconds = 0.0
+        time.sleep(interval)
+
+
 def _append_process_trace_event(
     process_trace,
     kind,
@@ -1143,6 +2600,10 @@ def _append_process_trace_event(
     if not isinstance(events, list):
         events = []
         process_trace["events"] = events
+    max_events = _get_chat_reply_task_trace_max_events()
+    if len(events) >= max_events:
+        events.pop(0)
+    event_ts = _current_process_trace_ts_text()
     events.append(
         {
             "kind": str(kind or "").strip() or "process",
@@ -1151,10 +2612,83 @@ def _append_process_trace_event(
             "input": input_data,
             "output": output_data,
             "error": str(error or "").strip(),
-            "ts": timezone.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "ts": event_ts,
             "token_usage": _normalize_token_usage(token_usage),
         }
     )
+    runtime = process_trace.get("runtime")
+    if isinstance(runtime, dict):
+        runtime["last_event_ts"] = event_ts
+        runtime["last_event_title"] = str(title or "").strip() or "步骤"
+        runtime["heartbeat_ts"] = event_ts
+    else:
+        process_trace["runtime"] = {
+            "stage_key": "",
+            "stage_label": "",
+            "heartbeat_ts": event_ts,
+            "last_event_ts": event_ts,
+            "last_event_title": str(title or "").strip() or "步骤",
+            "elapsed_ms": 0,
+            "timeout_seconds": 0,
+            "remaining_seconds": 0,
+            "watchdog_status": "running",
+        }
+
+
+def _finalize_last_running_process_trace_event(
+    process_trace,
+    title,
+    final_status,
+    output_data=None,
+    error="",
+    token_usage=None,
+):
+    if not isinstance(process_trace, dict):
+        return False
+    events = process_trace.get("events")
+    if not isinstance(events, list):
+        return False
+    normalized_title = str(title or "").strip()
+    for item in reversed(events):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("title") or "").strip() != normalized_title:
+            continue
+        if str(item.get("status") or "").strip() != "running":
+            continue
+        item["status"] = str(final_status or "").strip() or "success"
+        if output_data is not None:
+            item["output"] = output_data
+        if error is not None:
+            item["error"] = str(error or "").strip()
+        normalized_usage = _normalize_token_usage(token_usage)
+        if normalized_usage:
+            item["token_usage"] = normalized_usage
+        return True
+    return False
+
+
+def _finalize_last_running_process_trace_event_and_persist(
+    task,
+    process_trace,
+    title,
+    final_status,
+    output_data=None,
+    error="",
+    token_usage=None,
+    extra_update_fields=None,
+):
+    changed = _finalize_last_running_process_trace_event(
+        process_trace=process_trace,
+        title=title,
+        final_status=final_status,
+        output_data=output_data,
+        error=error,
+        token_usage=token_usage,
+    )
+    if changed:
+        _persist_process_trace(task, process_trace, extra_update_fields=extra_update_fields)
+    return changed
 
 
 def _persist_process_trace(task, process_trace, extra_update_fields=None):
@@ -1197,10 +2731,45 @@ def _append_process_trace_event_and_persist(
 
 def _normalize_process_trace(raw_trace):
     if not isinstance(raw_trace, dict):
-        return {"events": [], "token_usage": {}}
+        return _new_process_trace()
+    def _to_int(value, default=0):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return int(default)
+    def _to_float(value, default=0.0):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
     events = raw_trace.get("events")
     if not isinstance(events, list):
-        return {"events": [], "token_usage": _normalize_token_usage(raw_trace.get("token_usage"))}
+        normalized_fallback = _new_process_trace()
+        normalized_fallback["token_usage"] = _normalize_token_usage(raw_trace.get("token_usage"))
+        interaction = raw_trace.get("interaction")
+        if isinstance(interaction, dict):
+            normalized_fallback["interaction"] = {
+                "status": str(interaction.get("status") or "").strip() or "pending",
+                "request": interaction.get("request") if isinstance(interaction.get("request"), dict) else {},
+                "response": interaction.get("response") if isinstance(interaction.get("response"), dict) else {},
+                "updated_at": _normalize_process_trace_ts_text(interaction.get("updated_at")),
+            }
+        runtime = raw_trace.get("runtime")
+        if isinstance(runtime, dict):
+            normalized_fallback["runtime"].update(
+                {
+                    "stage_key": str(runtime.get("stage_key") or "").strip(),
+                    "stage_label": str(runtime.get("stage_label") or "").strip(),
+                    "heartbeat_ts": _normalize_process_trace_ts_text(runtime.get("heartbeat_ts")),
+                    "last_event_ts": _normalize_process_trace_ts_text(runtime.get("last_event_ts")),
+                    "last_event_title": str(runtime.get("last_event_title") or "").strip(),
+                    "elapsed_ms": _to_int(runtime.get("elapsed_ms"), 0),
+                    "timeout_seconds": _to_float(runtime.get("timeout_seconds"), 0.0),
+                    "remaining_seconds": _to_float(runtime.get("remaining_seconds"), 0.0),
+                    "watchdog_status": str(runtime.get("watchdog_status") or "idle").strip() or "idle",
+                }
+            )
+        return normalized_fallback
     normalized = []
     for item in events:
         if not isinstance(item, dict):
@@ -1213,21 +2782,48 @@ def _normalize_process_trace(raw_trace):
                 "input": item.get("input"),
                 "output": item.get("output"),
                 "error": str(item.get("error") or ""),
-                "ts": str(item.get("ts") or ""),
+                "ts": _normalize_process_trace_ts_text(item.get("ts")),
                 "token_usage": _normalize_token_usage(item.get("token_usage")),
             }
         )
-    return {
-        "events": normalized,
-        "token_usage": _normalize_token_usage(raw_trace.get("token_usage")),
-    }
+    normalized_trace = _new_process_trace()
+    normalized_trace["events"] = normalized
+    normalized_trace["token_usage"] = _normalize_token_usage(raw_trace.get("token_usage"))
+    interaction = raw_trace.get("interaction")
+    if isinstance(interaction, dict):
+        normalized_trace["interaction"] = {
+            "status": str(interaction.get("status") or "").strip() or "pending",
+            "request": interaction.get("request") if isinstance(interaction.get("request"), dict) else {},
+            "response": interaction.get("response") if isinstance(interaction.get("response"), dict) else {},
+            "updated_at": _normalize_process_trace_ts_text(interaction.get("updated_at")),
+        }
+    runtime = raw_trace.get("runtime")
+    if isinstance(runtime, dict):
+        normalized_trace["runtime"].update(
+            {
+                "stage_key": str(runtime.get("stage_key") or "").strip(),
+                "stage_label": str(runtime.get("stage_label") or "").strip(),
+                "heartbeat_ts": _normalize_process_trace_ts_text(runtime.get("heartbeat_ts")),
+                "last_event_ts": _normalize_process_trace_ts_text(runtime.get("last_event_ts")),
+                "last_event_title": str(runtime.get("last_event_title") or "").strip(),
+                "mindforge_strategy": _normalize_mindforge_strategy(str(runtime.get("mindforge_strategy") or "auto")),
+                "effective_companion_id": _to_int(runtime.get("effective_companion_id"), 0),
+                "elapsed_ms": _to_int(runtime.get("elapsed_ms"), 0),
+                "timeout_seconds": _to_float(runtime.get("timeout_seconds"), 0.0),
+                "remaining_seconds": _to_float(runtime.get("remaining_seconds"), 0.0),
+                "watchdog_status": str(runtime.get("watchdog_status") or "idle").strip() or "idle",
+            }
+        )
+    return normalized_trace
 
 
 def _build_messages_with_process_trace(session_obj):
     if not session_obj:
         return []
     message_items = list(session_obj.messages.all())
+    bound_companion = _resolve_companion_for_chat_session(session_obj) if _is_companion_chat_session(session_obj) else None
     trace_by_message_id = {}
+    effective_companion_id_by_message_id = {}
     reply_tasks = (
         ChatReplyTask.objects.filter(session=session_obj, assistant_message__isnull=False)
         .select_related("assistant_message")
@@ -1238,14 +2834,97 @@ def _build_messages_with_process_trace(session_obj):
         if not assistant_message_id or assistant_message_id in trace_by_message_id:
             continue
         normalized_trace = _normalize_process_trace(task.execution_trace)
-        if normalized_trace.get("events"):
+        effective_companion_id = _extract_chat_task_runtime_companion_id(task)
+        if effective_companion_id > 0:
+            effective_companion_id_by_message_id[assistant_message_id] = effective_companion_id
+        if normalized_trace.get("events") or normalized_trace.get("token_usage"):
             trace_by_message_id[assistant_message_id] = normalized_trace
+    companion_name_map = {}
+    effective_companion_ids = {value for value in effective_companion_id_by_message_id.values() if int(value) > 0}
+    if effective_companion_ids:
+        companion_queryset = CompanionProfile.objects.filter(
+            id__in=list(effective_companion_ids),
+        )
+        if getattr(session_obj, "created_by_id", None):
+            companion_queryset = companion_queryset.filter(created_by_id=session_obj.created_by_id)
+        if getattr(session_obj, "project_id", None):
+            companion_queryset = companion_queryset.filter(project_id=session_obj.project_id)
+        for companion in companion_queryset:
+            companion_name_map[int(companion.id)] = str(companion.display_name or companion.name or "助手").strip() or "助手"
     for msg in message_items:
         trace = trace_by_message_id.get(msg.id, {"events": []})
         msg.process_trace = trace
         msg.process_trace_events = trace.get("events", [])
         msg.token_usage = _normalize_token_usage(trace.get("token_usage"))
+        msg.responder_name = "助手"
+        if str(getattr(msg, "role", "")) == RequirementMessage.ROLE_USER:
+            msg.responder_name = "你"
+            continue
+        effective_companion_id = int(effective_companion_id_by_message_id.get(msg.id) or 0)
+        if effective_companion_id > 0:
+            msg.responder_name = companion_name_map.get(effective_companion_id, "助手")
+        elif bound_companion:
+            msg.responder_name = str(bound_companion.display_name or bound_companion.name or "助手").strip() or "助手"
     return message_items
+
+
+def _is_placeholder_assistant_content(content_text):
+    normalized = str(content_text or "").strip()
+    if not normalized:
+        return True
+    return normalized in {"思考中...", "思考中…", "思考中"}
+
+
+def _apply_running_task_watchdog_guard(task):
+    if not task or task.status != ChatReplyTask.STATUS_RUNNING:
+        return False
+    if not task.started_at:
+        return False
+    timeout_seconds = _get_chat_reply_task_timeout_seconds()
+    grace_seconds = _get_chat_reply_task_stuck_grace_seconds()
+    trace_payload = _normalize_process_trace(getattr(task, "execution_trace", {}))
+    runtime_payload = trace_payload.get("runtime") if isinstance(trace_payload.get("runtime"), dict) else {}
+    heartbeat_at = _parse_runtime_heartbeat_ts(runtime_payload.get("heartbeat_ts"))
+    reference_at = heartbeat_at or task.started_at
+    inactive_seconds = max(0.0, (timezone.now() - reference_at).total_seconds())
+    if inactive_seconds < (timeout_seconds + grace_seconds):
+        return False
+
+    task.status = ChatReplyTask.STATUS_FAILED
+    task.stop_requested = True
+    task.finished_at = timezone.now()
+    task.error_message = (
+        f"任务最后心跳超过 {int(timeout_seconds)} 秒未更新，已由看门狗自动回收。"
+    )
+    _touch_process_trace_runtime(
+        trace_payload,
+        stage_key="failed",
+        stage_label="看门狗回收",
+        started_at=task.started_at,
+        timeout_seconds=timeout_seconds,
+        watchdog_status="timeout_killed",
+    )
+    _finalize_last_running_process_trace_event_and_persist(
+        task=task,
+        process_trace=trace_payload,
+        title="开始处理请求",
+        final_status="failed",
+        error=task.error_message,
+        extra_update_fields=["status", "stop_requested", "error_message", "finished_at"],
+    )
+    _append_process_trace_event_and_persist(
+        task,
+        trace_payload,
+        kind="result",
+        title="看门狗终止任务",
+        status="failed",
+        error=task.error_message,
+        extra_update_fields=["status", "stop_requested", "error_message", "finished_at"],
+    )
+    if task.assistant_message and _is_placeholder_assistant_content(task.assistant_message.content):
+        task.assistant_message.content = "任务执行超时，已自动终止。请重试或缩小任务范围。"
+        task.assistant_message.save(update_fields=["content"])
+    return True
 
 
 def _build_chat_context(request, active_session=None, message_form=None, chat_session=None, companion_chat=None):
@@ -1278,6 +2957,16 @@ def _build_chat_context(request, active_session=None, message_form=None, chat_se
             if current_project and current_project.llm_model
             else getattr(settings, "QWEN_MODEL", "未配置模型")
         )
+    companion_id = int(companion_chat.id) if companion_chat else 0
+    companion_mindforge_strategy_key = _get_companion_mindforge_strategy_for_request(
+        request=request,
+        companion_id=companion_id,
+    )
+    companion_mindforge_strategy_label = _mindforge_strategy_label(companion_mindforge_strategy_key)
+    companion_mindforge_strategy_options = _build_mindforge_strategy_options()
+    companion_mindforge_strategy_set_url = (
+        reverse("companion_set_mindforge_strategy", args=[companion_id]) if companion_id else ""
+    )
 
     rollback_draft = _get_rollback_draft(request, primary_chat_session.id) if primary_chat_session else None
     if primary_chat_session and message_form is None and rollback_draft and not is_summary_view:
@@ -1311,6 +3000,25 @@ def _build_chat_context(request, active_session=None, message_form=None, chat_se
             order_by_chat_time=True,
         )
 
+    inflight_reply_task = None
+    if display_session:
+        inflight_candidates = list(
+            ChatReplyTask.objects.filter(
+                session=display_session,
+                created_by=request.user,
+                assistant_message__isnull=False,
+                status__in=[ChatReplyTask.STATUS_PENDING, ChatReplyTask.STATUS_RUNNING],
+            )
+            .order_by("-id")[:8]
+        )
+        for candidate in inflight_candidates:
+            if candidate.status == ChatReplyTask.STATUS_RUNNING:
+                _apply_running_task_watchdog_guard(candidate)
+                candidate.refresh_from_db(fields=["status", "assistant_message_id"])
+            if candidate.status in {ChatReplyTask.STATUS_PENDING, ChatReplyTask.STATUS_RUNNING}:
+                inflight_reply_task = candidate
+                break
+
     return {
         "sessions": summary_sessions,
         "summary_sessions": summary_sessions,
@@ -1330,6 +3038,8 @@ def _build_chat_context(request, active_session=None, message_form=None, chat_se
         "current_nav": "chat",
         "ui_theme": _get_ui_theme(request),
         "ui_theme_options": THEME_LABELS,
+        "permission_restriction_enabled": _get_permission_restriction_enabled(),
+        "companion_final_step_watchdog_seconds": _get_companion_final_step_watchdog_seconds(),
         "enabled_companions": enabled_companion_items,
         "sidebar_companion_items": sidebar_companion_items,
         "current_companion_nav_id": companion_chat.id if companion_chat else None,
@@ -1339,6 +3049,14 @@ def _build_chat_context(request, active_session=None, message_form=None, chat_se
         "enable_summary_drawer": not is_companion_chat,
         "enable_summary_actions": not is_companion_chat,
         "show_llm_selector": not is_companion_chat,
+        "companion_mindforge_strategy": companion_mindforge_strategy_key,
+        "companion_mindforge_strategy_label": companion_mindforge_strategy_label,
+        "companion_mindforge_strategy_options": companion_mindforge_strategy_options,
+        "companion_mindforge_strategy_set_url": companion_mindforge_strategy_set_url,
+        "inflight_reply_task_id": inflight_reply_task.id if inflight_reply_task else 0,
+        "inflight_reply_assistant_message_id": (
+            inflight_reply_task.assistant_message_id if inflight_reply_task else 0
+        ),
     }
 
 
@@ -1682,6 +3400,67 @@ def _recover_interrupted_local_llm_tasks():
         )
 
 
+def recover_interrupted_chat_reply_tasks_once():
+    global CHAT_REPLY_RECOVERY_DONE
+    with CHAT_REPLY_RECOVERY_LOCK:
+        if CHAT_REPLY_RECOVERY_DONE:
+            return
+        stale_tasks = list(
+            ChatReplyTask.objects.filter(
+                status__in=[ChatReplyTask.STATUS_PENDING, ChatReplyTask.STATUS_RUNNING],
+                updated_at__lt=CHAT_REPLY_PROCESS_BOOT_AT,
+            ).order_by("created_at")
+        )
+        for task in stale_tasks:
+            try:
+                if bool(task.stop_requested):
+                    task.status = ChatReplyTask.STATUS_STOPPED
+                    if not task.finished_at:
+                        task.finished_at = timezone.now()
+                    task.save(update_fields=["status", "finished_at", "updated_at"])
+                    continue
+                _apply_running_task_watchdog_guard(task)
+                task.refresh_from_db(fields=["status", "updated_at", "execution_trace", "started_at"])
+                if task.status not in {ChatReplyTask.STATUS_PENDING, ChatReplyTask.STATUS_RUNNING}:
+                    continue
+                strategy = _extract_chat_task_runtime_mindforge_strategy(task)
+                effective_companion_id = _extract_chat_task_runtime_companion_id(task)
+                trace_payload = _normalize_process_trace(getattr(task, "execution_trace", {}))
+                _touch_process_trace_runtime(
+                    trace_payload,
+                    stage_key="recovery",
+                    stage_label="服务重启后恢复执行",
+                    started_at=task.started_at or timezone.now(),
+                    timeout_seconds=_get_chat_reply_task_timeout_seconds(),
+                    watchdog_status="running",
+                )
+                runtime_payload = trace_payload.get("runtime") if isinstance(trace_payload.get("runtime"), dict) else {}
+                runtime_payload["mindforge_strategy"] = strategy
+                runtime_payload["effective_companion_id"] = effective_companion_id
+                trace_payload["runtime"] = runtime_payload
+                _append_process_trace_event_and_persist(
+                    task,
+                    trace_payload,
+                    kind="process",
+                    title="检测到服务重启，恢复后台任务",
+                    status="running",
+                    input_data={
+                        "mindforge_strategy": strategy,
+                        "effective_companion_id": effective_companion_id,
+                        "task_id": task.id,
+                    },
+                )
+                worker = threading.Thread(
+                    target=_run_chat_reply_task,
+                    args=(task.id, strategy, effective_companion_id),
+                    daemon=True,
+                )
+                worker.start()
+            except Exception:
+                continue
+        CHAT_REPLY_RECOVERY_DONE = True
+
+
 def _execute_local_llm_runtime_task(task_id: int):
     close_old_connections()
     try:
@@ -1876,21 +3655,33 @@ def _get_agent_module_dir(module_name: str) -> Path:
     return get_agent_module_dir(module_name)
 
 
-def _get_cursor_root() -> Path:
-    return Path(Project.get_core_project_path()) / ".cursor"
-
-
 def _get_skills_root() -> Path:
-    return _get_cursor_root() / "skills"
+    return _get_agents_root() / "skills"
+
+
+def _get_rules_root() -> Path:
+    return _get_agents_root() / "rules"
+
+
+def _refresh_capability_search_cache_if_needed() -> None:
+    """
+    在组件/工具/智能体发生新增后触发搜索索引刷新，
+    避免列表可见但搜索缓存未命中的延迟问题。
+    """
+    try:
+        refresh_capability_index()
+    except Exception:
+        return
 
 
 def _list_toolset_items(
     keyword: str,
     selected_os: str = OS_FILTER_ALL,
+    selected_source: str = "all",
     search_engine: str = SEARCH_ENGINE_AUTO,
     search_mode: str = SEARCH_MODE_HYBRID,
 ):
-    items = list_toolsets(keyword="", selected_os=selected_os)
+    items = list_toolsets(keyword="", selected_os=selected_os, selected_source=selected_source)
     normalized_keyword = str(keyword or "").strip()
     if not normalized_keyword:
         return items, {"engine_used": "native", "fallback_used": False, "error": ""}, []
@@ -1929,17 +3720,20 @@ def _build_toolset_page_context(
     request,
     keyword: str,
     selected_os: str,
+    selected_source: str,
     search_engine: str,
     search_mode: str,
 ):
     current_runtime_os = _get_current_runtime_os()
     normalized_os = _normalize_os_filter(selected_os, current_runtime_os)
+    normalized_source = _normalize_toolset_source(selected_source)
     normalized_engine = _normalize_search_engine(search_engine)
     normalized_mode = _normalize_search_mode(search_mode)
-    all_toolsets, _, _ = _list_toolset_items("", OS_FILTER_ALL)
+    all_toolsets, _, _ = _list_toolset_items("", OS_FILTER_ALL, "all")
     filtered_toolsets, debug_meta, llm_preview = _list_toolset_items(
         keyword,
         normalized_os,
+        normalized_source,
         search_engine=normalized_engine,
         search_mode=normalized_mode,
     )
@@ -1949,7 +3743,9 @@ def _build_toolset_page_context(
             "current_nav": "toolset_list",
             "toolset_keyword": keyword,
             "toolset_os": normalized_os,
+            "toolset_source": normalized_source,
             "os_options": _build_os_options(),
+            "toolset_source_options": list_toolset_source_options(include_all=True),
             "current_runtime_os": current_runtime_os,
             "current_runtime_os_label": OS_LABELS.get(current_runtime_os, current_runtime_os),
             "toolset_items": filtered_toolsets,
@@ -1975,40 +3771,53 @@ def _read_report_preview(report_path: str, max_chars: int = 12000) -> str:
     return text.strip()
 
 
-def _run_knowledge_curation_for_project(current_project):
-    if not current_project:
-        return {"success": False, "error": "未找到当前项目，无法执行知识库整理。"}
+def _load_knowledge_curation_tool():
+    toolset_key = "knowledge_curation_tool"
+    try:
+        enabled = bool(get_toolset_enabled(toolset_key))
+    except KeyError:
+        return None, f"未找到工具集：{toolset_key}。请先完成动态注册后再执行知识库整理。"
+    if not enabled:
+        return None, f"工具集已停用：{toolset_key}。"
 
-    project_root = Path(str(current_project.path or "")).resolve()
-    knowledge_dir = project_root / "doc" / "01-or"
-    output_dir = project_root / "data" / "temp" / "knowledge_reports"
-
-    tool = KnowledgeCurationTool()
-    result = tool.generate_report(
-        knowledge_dir=str(knowledge_dir),
-        output_dir=str(output_dir),
+    module_candidates = (
+        f"tools.{toolset_key}",
+        f"tools.{toolset_key}.{toolset_key}",
     )
-    if not result.get("success"):
-        return {
-            "success": False,
-            "error": str(result.get("error") or "知识库整理执行失败。"),
-            "knowledge_dir": str(knowledge_dir),
-            "output_dir": str(output_dir),
-        }
+    last_error = ""
+    for module_path in module_candidates:
+        try:
+            module_obj = importlib.import_module(module_path)
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            continue
+        tool_cls = getattr(module_obj, "KnowledgeCurationTool", None)
+        if tool_cls is None:
+            continue
+        try:
+            return tool_cls(), ""
+        except Exception as exc:
+            return None, f"知识库整理工具初始化失败：{type(exc).__name__}: {exc}"
 
-    payload = result.get("data") or {}
-    report_path = str(payload.get("report_path") or "").strip()
-    report_preview = _read_report_preview(report_path) if report_path else ""
-    return {
-        "success": True,
-        "knowledge_dir": str(knowledge_dir),
-        "output_dir": str(output_dir),
-        "report_path": report_path,
-        "report_preview": report_preview,
-        "health": payload.get("health") or {},
-        "links": payload.get("links") or {},
-        "duplicates": payload.get("duplicates") or {},
-    }
+    if last_error:
+        return None, f"知识库整理工具动态加载失败：{last_error}"
+    return None, "知识库整理工具未暴露 KnowledgeCurationTool 类。"
+
+
+def _generate_knowledge_curation_report(knowledge_dir: Path, output_dir: Path):
+    tool, load_error = _load_knowledge_curation_tool()
+    if load_error:
+        return {"success": False, "error": load_error}
+    try:
+        result = tool.generate_report(
+            knowledge_dir=str(knowledge_dir),
+            output_dir=str(output_dir),
+        )
+    except Exception as exc:
+        return {"success": False, "error": f"知识库整理执行异常：{type(exc).__name__}: {exc}"}
+    if not isinstance(result, dict):
+        return {"success": False, "error": "知识库整理返回结果格式错误。"}
+    return result
 
 
 def _read_text_file_summary(file_path: Path, default_text: str, max_length: int = 160) -> str:
@@ -2351,10 +4160,9 @@ def _run_knowledge_curation_for_companion(current_project, companion):
     project_root = Path(str(current_project.path or "")).resolve()
     output_dir = project_root / "data" / "temp" / "knowledge_reports" / "companions" / str(companion.id)
 
-    tool = KnowledgeCurationTool()
-    result = tool.generate_report(
-        knowledge_dir=str(knowledge_dir),
-        output_dir=str(output_dir),
+    result = _generate_knowledge_curation_report(
+        knowledge_dir=knowledge_dir,
+        output_dir=output_dir,
     )
     if not result.get("success"):
         return {
@@ -2384,7 +4192,7 @@ def _run_knowledge_curation_for_companion(current_project, companion):
 
 
 def _list_system_rule_items(keyword: str):
-    rules_root = _get_cursor_root() / "rules"
+    rules_root = _get_rules_root()
     normalized_keyword = str(keyword or "").strip().lower()
     if not rules_root.exists() or not rules_root.is_dir():
         return []
@@ -2398,7 +4206,7 @@ def _list_system_rule_items(keyword: str):
             continue
         rel_path_obj = entry.relative_to(rules_root)
         rel_path = rel_path_obj.as_posix()
-        display_path = (Path(".cursor") / "rules" / rel_path_obj).as_posix()
+        display_path = (Path("agents") / "rules" / rel_path_obj).as_posix()
         summary = _read_text_file_summary(entry, f"{entry.name} 暂无摘要内容")
         searchable_text = f"{entry.name} {display_path} {summary}".lower()
         if normalized_keyword and normalized_keyword not in searchable_text:
@@ -2434,14 +4242,18 @@ def _resolve_system_skill_dir(skill_name: str):
 
 
 def _resolve_system_rule_file(path_value: str):
-    rules_root = _get_cursor_root() / "rules"
+    rules_root = _get_rules_root()
     if not rules_root.exists() or not rules_root.is_dir():
         return "", None, "规则目录不存在。"
 
     normalized = _normalize_explorer_relpath(path_value)
     if normalized is None or not normalized:
         return "", None, "规则路径不合法。"
-    if normalized.startswith(".cursor/rules/"):
+    if normalized.startswith("agents/rules/"):
+        normalized = normalized[len("agents/rules/") :]
+    elif normalized == "agents/rules":
+        return "", None, "规则路径不合法。"
+    elif normalized.startswith(".cursor/rules/"):
         normalized = normalized[len(".cursor/rules/") :]
     elif normalized == ".cursor/rules":
         return "", None, "规则路径不合法。"
@@ -3314,30 +5126,145 @@ def companion_edit(request, companion_id):
 
 
 @login_required
+def capability_search(request):
+    keyword = str(request.GET.get("q", "")).strip()
+    selected_types = _normalize_capability_search_types(request.GET.getlist("types"))
+    selected_kind_set = {
+        CAPABILITY_SEARCH_TYPE_TO_KIND[item]
+        for item in selected_types
+        if item in CAPABILITY_SEARCH_TYPE_TO_KIND
+    }
+    search_engine = _normalize_search_engine(request.GET.get("search_engine", ""))
+    search_mode = _normalize_search_mode(request.GET.get("search_mode", ""))
+
+    results = []
+    search_debug_meta = {"engine_used": "native", "fallback_used": False, "error": ""}
+    if keyword:
+        ranked_items, search_debug_meta = search_capabilities(
+            query=keyword,
+            allowed_toolsets=[],
+            allowed_agent_modules=list(ALLOWED_AGENT_MODULES.keys()),
+            allowed_control_modules=list(ALLOWED_CONTROL_MODULES.keys()),
+            search_mode=search_mode,
+            search_engine=search_engine,
+            top_k=120,
+        )
+        for item in ranked_items:
+            kind = str(item.get("kind") or "").strip()
+            if kind not in selected_kind_set:
+                continue
+            module_name = str(item.get("module") or "").strip()
+            name = str(item.get("name") or "").strip()
+            path = str(item.get("path") or "").strip()
+            result_name = path if kind == "component_function" else name
+            results.append(
+                {
+                    "kind": kind,
+                    "kind_label": CAPABILITY_KIND_LABELS.get(kind, kind),
+                    "name": result_name or name or path,
+                    "path": path,
+                    "module_name": module_name,
+                    "module_label": ALLOWED_AGENT_MODULES.get(module_name)
+                    or ALLOWED_CONTROL_MODULES.get(module_name)
+                    or module_name,
+                    "description": str(item.get("description") or "").strip() or "暂无描述",
+                    "score": float(item.get("score") or 0.0),
+                    "jump_url": _build_capability_search_jump_url(
+                        kind=kind,
+                        module_name=module_name,
+                        item_name=name,
+                        query=keyword,
+                        search_engine=search_engine,
+                        search_mode=search_mode,
+                    ),
+                }
+            )
+
+    type_count = {
+        CAPABILITY_SEARCH_TYPE_AGENT: 0,
+        CAPABILITY_SEARCH_TYPE_TOOLSET: 0,
+        CAPABILITY_SEARCH_TYPE_COMPONENT: 0,
+    }
+    for item in results:
+        kind = str(item.get("kind") or "").strip()
+        for type_key, mapped_kind in CAPABILITY_SEARCH_TYPE_TO_KIND.items():
+            if kind == mapped_kind:
+                type_count[type_key] += 1
+                break
+
+    context = _build_chat_context(request)
+    context.update(
+        {
+            "current_nav": "capability_search",
+            "search_keyword": keyword,
+            "search_results": results,
+            "search_total": len(results),
+            "search_type_options": CAPABILITY_SEARCH_TYPE_OPTIONS,
+            "search_selected_types": selected_types,
+            "search_type_count": type_count,
+            "search_engine": search_engine,
+            "search_mode": search_mode,
+            "search_engine_options": SEARCH_ENGINE_OPTIONS,
+            "search_mode_options": SEARCH_MODE_OPTIONS,
+            "search_debug_meta": search_debug_meta,
+        }
+    )
+    return render(request, "collector/capability_search.html", context)
+
+
+@login_required
 def toolset_list(request):
     request_data = request.POST if request.method == "POST" else request.GET
     keyword = request_data.get("q", "").strip()
     selected_os = request_data.get("os", "")
+    selected_source = request_data.get("source", "")
     search_engine = request_data.get("search_engine", "").strip()
     search_mode = request_data.get("search_mode", "").strip()
     context = _build_toolset_page_context(
         request,
         keyword=keyword,
         selected_os=selected_os,
+        selected_source=selected_source,
         search_engine=search_engine,
         search_mode=search_mode,
     )
 
     if request.method == "POST":
         action = str(request.POST.get("action", "")).strip()
-        if action == "run_knowledge_curation":
-            run_result = _run_knowledge_curation_for_project(context.get("current_project"))
-            if run_result.get("success"):
-                context["knowledge_curation_notice"] = "知识库整理执行完成。"
-                context["knowledge_curation_result"] = run_result
+        if action == "toggle_toolset_enabled":
+            toolset_key = str(request.POST.get("toolset_key", "")).strip()
+            if not toolset_key:
+                messages.error(request, "缺少工具集标识。")
             else:
-                context["knowledge_curation_error"] = str(run_result.get("error") or "知识库整理执行失败。")
-                context["knowledge_curation_result"] = run_result
+                try:
+                    current_enabled = bool(get_toolset_enabled(toolset_key))
+                    target_enabled = not current_enabled
+                    target_action = str(request.POST.get("target_action", "")).strip().lower()
+                    if target_action in {"enable", "disable"}:
+                        target_enabled = target_action == "enable"
+                    set_toolset_enabled(toolset_key, target_enabled)
+                    status_text = "已启用" if target_enabled else "已停用"
+                    messages.success(request, f"工具集状态已更新：{toolset_key} -> {status_text}")
+                    _refresh_capability_search_cache_if_needed()
+                except KeyError:
+                    messages.error(request, f"工具集不存在：{toolset_key}")
+                except Exception as exc:
+                    messages.error(request, f"工具集状态更新失败：{exc}")
+            redirect_url = reverse("toolset_list")
+            query_args = {}
+            if keyword:
+                query_args["q"] = keyword
+            if selected_os:
+                query_args["os"] = selected_os
+            if selected_source:
+                query_args["source"] = selected_source
+            if search_engine:
+                query_args["search_engine"] = search_engine
+            if search_mode:
+                query_args["search_mode"] = search_mode
+            if query_args:
+                redirect_url = f"{redirect_url}?{urlencode(query_args)}"
+            return redirect(redirect_url)
 
     return render(request, "collector/toolset_list.html", context)
 
@@ -3475,6 +5402,7 @@ def agent_item_upload(request, module_name):
         messages.error(request, f"导入失败：{exc}")
         return redirect("agent_item_list", module_name=module_name)
 
+    _refresh_capability_search_cache_if_needed()
     messages.success(request, f"智能体项 {item_dir_name} 导入完成。")
     return redirect("agent_item_list", module_name=module_name)
 
@@ -3635,7 +5563,7 @@ def system_rule_detail(request):
         {
             "current_nav": "system_rules",
             "rule_path": normalized_path,
-            "rule_display_path": (Path(".cursor") / "rules" / normalized_path).as_posix() if normalized_path else "",
+            "rule_display_path": (Path("agents") / "rules" / normalized_path).as_posix() if normalized_path else "",
             "rule_content": content_text,
             "rule_error": resolve_error,
             "rule_is_editable": is_editable,
@@ -4200,6 +6128,7 @@ def control_function_upload(request, module_name):
         messages.error(request, f"上传失败：{exc}")
         return redirect("control_function_list", module_name=module_name)
 
+    _refresh_capability_search_cache_if_needed()
     messages.success(request, f"组件 {component_dir_name} 上传并解压完成，已在模块 {module_name} 下创建。")
     return redirect("control_function_list", module_name=module_name)
 
@@ -4422,13 +6351,23 @@ def session_send(request, session_id):
             active_session,
             current_project=selected_project,
         )
-        companion = _resolve_companion_for_chat_session(active_session)
+        companion = _resolve_runtime_companion_for_chat_request(
+            active_session,
+            user=request.user,
+            current_project=selected_project,
+            user_content=user_content,
+        )
         if companion:
+            selected_mindforge_strategy = _get_companion_mindforge_strategy_for_request(
+                request=request,
+                companion_id=companion.id,
+            )
             orchestration_context = _build_companion_orchestration_context(
                 session_obj=active_session,
                 companion=companion,
                 current_project=selected_project,
                 selected_llm_model=selected_llm_model,
+                mindforge_strategy_override=selected_mindforge_strategy,
             )
             orchestration_result = run_companion_orchestration(orchestration_context)
             response_text = str(orchestration_result.get("final_answer") or "").strip()
@@ -4496,6 +6435,29 @@ def session_send_async(request, session_id):
     if not user_content and not user_attachment:
         return JsonResponse({"success": False, "error": "请输入消息内容或上传附件。"}, status=400)
 
+    selected_project = active_session.project or _get_current_project(request)
+    runtime_companion = _resolve_runtime_companion_for_chat_request(
+        active_session,
+        user=request.user,
+        current_project=selected_project,
+        user_content=user_content,
+    )
+    companion_id = int(getattr(runtime_companion, "id", 0) or 0)
+    selected_mindforge_strategy = ""
+    if companion_id:
+        posted_strategy = str(request.POST.get("mindforge_strategy") or "").strip()
+        if posted_strategy:
+            selected_mindforge_strategy = _set_companion_mindforge_strategy_for_request(
+                request=request,
+                companion_id=companion_id,
+                strategy=posted_strategy,
+            )
+        else:
+            selected_mindforge_strategy = _get_companion_mindforge_strategy_for_request(
+                request=request,
+                companion_id=companion_id,
+            )
+
     user_message = RequirementMessage.objects.create(
         session=active_session,
         role=RequirementMessage.ROLE_USER,
@@ -4515,7 +6477,15 @@ def session_send_async(request, session_id):
         created_by=request.user,
         status=ChatReplyTask.STATUS_PENDING,
     )
-    worker = threading.Thread(target=_run_chat_reply_task, args=(reply_task.id,), daemon=True)
+    if companion_id:
+        _persist_chat_task_runtime_companion_override(reply_task, companion_id)
+    if companion_id:
+        _persist_chat_task_runtime_mindforge_strategy(reply_task, selected_mindforge_strategy or "auto")
+    worker = threading.Thread(
+        target=_run_chat_reply_task,
+        args=(reply_task.id, selected_mindforge_strategy, companion_id),
+        daemon=True,
+    )
     worker.start()
     _clear_rollback_draft(request, active_session.id)
 
@@ -4526,13 +6496,20 @@ def session_send_async(request, session_id):
             "user_message": {
                 "id": user_message.id,
                 "content": user_message.content,
+                "content_html": render_chat_content_html(user_message.content),
                 "attachment_name": os.path.basename(user_message.attachment.name) if user_message.attachment else "",
                 "created_at": user_message.created_at.strftime("%H:%M:%S"),
             },
             "assistant_message": {
                 "id": assistant_message.id,
                 "content": assistant_message.content,
+                "content_html": render_chat_content_html(assistant_message.content),
                 "created_at": assistant_message.created_at.strftime("%H:%M:%S"),
+                "responder_name": (
+                    str(getattr(runtime_companion, "display_name", "") or getattr(runtime_companion, "name", "") or "").strip()
+                    if runtime_companion
+                    else "助手"
+                ) or "助手",
             },
         }
     )
@@ -4546,7 +6523,16 @@ def chat_reply_task_status(request, session_id, task_id):
         session_id=session_id,
         created_by=request.user,
     )
-    assistant_text = task.assistant_message.content if task.assistant_message else ""
+    _apply_running_task_watchdog_guard(task)
+    task.refresh_from_db(fields=["status", "error_message", "updated_at", "finished_at", "execution_trace", "started_at"])
+    assistant_text = ""
+    if task.assistant_message_id:
+        assistant_text = (
+            RequirementMessage.objects.filter(id=task.assistant_message_id)
+            .values_list("content", flat=True)
+            .first()
+            or ""
+        )
     is_done = task.status in {
         ChatReplyTask.STATUS_COMPLETED,
         ChatReplyTask.STATUS_STOPPED,
@@ -4554,6 +6540,37 @@ def chat_reply_task_status(request, session_id, task_id):
     }
     orchestration_meta = _get_chat_orchestration_meta(task.id)
     process_trace = _normalize_process_trace(task.execution_trace)
+    interaction_payload = _build_task_interaction_payload(process_trace)
+    runtime_status = process_trace.get("runtime") if isinstance(process_trace.get("runtime"), dict) else {}
+    elapsed_ms = 0
+    if task.started_at:
+        elapsed_ms = max(0, int((timezone.now() - task.started_at).total_seconds() * 1000))
+    timeout_seconds = _get_chat_reply_task_timeout_seconds()
+    runtime_status["elapsed_ms"] = elapsed_ms
+    runtime_status["timeout_seconds"] = float(runtime_status.get("timeout_seconds") or timeout_seconds)
+    runtime_status["remaining_seconds"] = max(
+        0.0,
+        float(runtime_status.get("timeout_seconds") or timeout_seconds) - elapsed_ms / 1000.0,
+    )
+    if not runtime_status.get("watchdog_status"):
+        runtime_status["watchdog_status"] = "running" if task.status == ChatReplyTask.STATUS_RUNNING else "idle"
+    process_trace["runtime"] = runtime_status
+    status_hint = ""
+    if task.status == ChatReplyTask.STATUS_PENDING:
+        status_hint = "任务已创建，等待执行。"
+    elif task.status == ChatReplyTask.STATUS_RUNNING:
+        stage_label = str(runtime_status.get("stage_label") or "").strip() or "任务执行中"
+        elapsed_seconds = max(0.0, float(elapsed_ms) / 1000.0)
+        timeout_value = max(0.0, float(runtime_status.get("timeout_seconds") or 0.0))
+        remaining_seconds = max(0.0, float(runtime_status.get("remaining_seconds") or 0.0))
+        status_hint = f"{stage_label}（已运行 {elapsed_seconds:.1f}s"
+        if timeout_value > 0:
+            status_hint = f"{status_hint}，剩余约 {remaining_seconds:.1f}s"
+        status_hint = f"{status_hint}）"
+    if interaction_payload and interaction_payload.get("pending"):
+        request_payload = interaction_payload.get("request") if isinstance(interaction_payload.get("request"), dict) else {}
+        interaction_title = str(request_payload.get("title") or "").strip() or "请完成交互输入"
+        status_hint = f"等待交互输入：{interaction_title}"
     if not process_trace.get("token_usage"):
         process_trace["token_usage"] = _normalize_token_usage(orchestration_meta.get("token_usage"))
     if not process_trace.get("events"):
@@ -4566,7 +6583,11 @@ def chat_reply_task_status(request, session_id, task_id):
                 _append_process_trace_event(
                     process_trace,
                     kind="thinking",
-                    title=f"步骤 {step.get('step_id') or ''}",
+                    title=_build_step_trace_title(
+                        step=step,
+                        step_executor=str(step.get("executor") or ""),
+                        step_output=step.get("output") if isinstance(step.get("output"), dict) else {},
+                    ),
                     status=str(step.get("status") or "success"),
                     input_data={"executor": step.get("executor")},
                     output_data=step.get("output"),
@@ -4577,6 +6598,14 @@ def chat_reply_task_status(request, session_id, task_id):
                         else {}
                     ),
                 )
+    if is_done and _is_placeholder_assistant_content(assistant_text):
+        if task.status == ChatReplyTask.STATUS_STOPPED:
+            assistant_text = "已停止本次回复。"
+        elif task.status == ChatReplyTask.STATUS_FAILED:
+            fallback_error = str(task.error_message or "").strip()
+            assistant_text = f"任务执行失败：{fallback_error}" if fallback_error else "任务执行失败，请稍后重试。"
+        if task.assistant_message_id:
+            RequirementMessage.objects.filter(id=task.assistant_message_id).update(content=assistant_text)
     return JsonResponse(
         {
             "success": True,
@@ -4584,15 +6613,80 @@ def chat_reply_task_status(request, session_id, task_id):
             "status": task.status,
             "is_done": is_done,
             "content": assistant_text,
+            "content_html": render_chat_content_html(assistant_text),
             "error": task.error_message or "",
             "plan_steps": orchestration_meta.get("plan_steps", []),
             "active_agent": orchestration_meta.get("active_agent", ""),
             "tool_events": orchestration_meta.get("tool_events", []),
             "fallback_used": bool(orchestration_meta.get("fallback_used", False)),
             "process_trace": process_trace,
+            "interaction": interaction_payload,
+            "runtime_status": runtime_status,
+            "status_hint": status_hint,
             "token_usage": _normalize_token_usage(process_trace.get("token_usage")),
+            "responder_name": _resolve_responder_name_for_session_task(task.session, task=task),
         }
     )
+
+
+@login_required
+def chat_reply_task_interaction_submit(request, session_id, task_id):
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "仅支持 POST 请求。"}, status=405)
+
+    task = get_object_or_404(
+        ChatReplyTask.objects.select_related("session"),
+        id=task_id,
+        session_id=session_id,
+        created_by=request.user,
+    )
+    if task.status != ChatReplyTask.STATUS_RUNNING:
+        return JsonResponse({"success": False, "error": "当前任务不在交互中。"}, status=400)
+    interaction_id = str(request.POST.get("interaction_id") or "").strip()
+    interaction_value = str(request.POST.get("interaction_value") or "").strip()
+    if not interaction_id:
+        return JsonResponse({"success": False, "error": "缺少交互ID。"}, status=400)
+
+    process_trace = _normalize_process_trace(task.execution_trace)
+    interaction_payload = _build_task_interaction_payload(process_trace)
+    request_payload = interaction_payload.get("request") if isinstance(interaction_payload.get("request"), dict) else {}
+    if not interaction_payload or not interaction_payload.get("pending"):
+        return JsonResponse({"success": False, "error": "当前无待处理交互请求。"}, status=400)
+    if str(request_payload.get("interaction_id") or "").strip() != interaction_id:
+        return JsonResponse({"success": False, "error": "交互ID不匹配。"}, status=400)
+
+    interaction_type = str(request_payload.get("type") or "").strip()
+    required_value = bool(request_payload.get("required", True))
+    if required_value and not interaction_value:
+        return JsonResponse({"success": False, "error": "该交互项为必填，请输入后提交。"}, status=400)
+
+    if interaction_type == INTERACTION_TYPE_SINGLE_SELECT:
+        options = _normalize_interaction_options(request_payload.get("options"))
+        allowed_values = {str(item.get("value") or "").strip() for item in options}
+        if interaction_value and interaction_value not in allowed_values:
+            return JsonResponse({"success": False, "error": "交互选项不合法。"}, status=400)
+
+    _set_task_interaction_response_cache(
+        task_id=task.id,
+        interaction_id=interaction_id,
+        response_value=interaction_value,
+    )
+    masked_value = interaction_value
+    if bool(request_payload.get("mask_value", interaction_type == INTERACTION_TYPE_PASSWORD)):
+        masked_value = _mask_interaction_value(interaction_value)
+    response_data = {
+        "submitted": True,
+        "submitted_at": timezone.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "value": masked_value,
+    }
+    _set_process_trace_interaction(
+        process_trace,
+        status="answered",
+        request_data=request_payload,
+        response_data=response_data,
+    )
+    _persist_process_trace(task, process_trace)
+    return JsonResponse({"success": True, "interaction": _build_task_interaction_payload(process_trace)})
 
 
 @login_required
@@ -4901,8 +6995,39 @@ def system_settings(request):
         return redirect("profile_settings")
 
     next_url = str(request.POST.get("next", "")).strip()
-    selected = _set_ui_theme(request, request.POST.get("ui_theme", ""))
-    messages.success(request, f"界面主题已更新为：{THEME_LABELS[selected]}")
+    has_theme = "ui_theme" in request.POST
+    has_permission_switch = "permission_restriction_enabled" in request.POST
+    has_companion_watchdog = "companion_final_step_watchdog_seconds" in request.POST
+
+    if has_theme:
+        selected = _set_ui_theme(request, request.POST.get("ui_theme", ""))
+        messages.success(request, f"界面主题已更新为：{THEME_LABELS[selected]}")
+
+    if has_permission_switch:
+        enabled = _parse_bool_flag(request.POST.get("permission_restriction_enabled"), default=True)
+        if _set_permission_restriction_enabled(enabled):
+            if enabled:
+                messages.success(request, "权限限制已开启：伙伴调用将按白名单限制。")
+            else:
+                messages.success(request, "权限限制已关闭：调试模式下对所有伙伴不做白名单限制。")
+        else:
+            messages.error(request, "权限限制设置保存失败，请先执行 migrate 后重试。")
+
+    if has_companion_watchdog:
+        raw_seconds = request.POST.get("companion_final_step_watchdog_seconds")
+        try:
+            parsed_seconds = max(10.0, float(raw_seconds))
+        except (TypeError, ValueError):
+            parsed_seconds = None
+        if parsed_seconds is None:
+            messages.error(request, "最后一步看门狗超时时间格式无效，请输入数字秒数。")
+        elif _set_companion_final_step_watchdog_seconds(parsed_seconds):
+            messages.success(request, f"自主规划最后一步无响应看门狗已更新为 {int(parsed_seconds)} 秒。")
+        else:
+            messages.error(request, "最后一步看门狗设置保存失败，请先执行 migrate 后重试。")
+
+    if not has_theme and not has_permission_switch and not has_companion_watchdog:
+        messages.error(request, "未检测到可更新的系统设置项。")
     if next_url and url_has_allowed_host_and_scheme(
         url=next_url,
         allowed_hosts={request.get_host()},
@@ -5341,3 +7466,25 @@ def project_set_llm(request, project_id):
         except Exception as e:
             return JsonResponse({'success': False, 'error': str(e)}, status=400)
     return JsonResponse({'success': False, 'error': 'Invalid request method'}, status=405)
+
+
+@login_required
+def companion_set_mindforge_strategy(request, companion_id):
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "仅支持 POST 请求。"}, status=405)
+    companion = get_object_or_404(
+        CompanionProfile.objects.filter(created_by=request.user),
+        id=companion_id,
+    )
+    selected = _set_companion_mindforge_strategy_for_request(
+        request=request,
+        companion_id=companion.id,
+        strategy=str(request.POST.get("mindforge_strategy") or "auto"),
+    )
+    return JsonResponse(
+        {
+            "success": True,
+            "mindforge_strategy": selected,
+            "mindforge_strategy_label": _mindforge_strategy_label(selected),
+        }
+    )

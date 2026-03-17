@@ -44,9 +44,10 @@
         </button>
         <div class="menu-section-body">
             {% for module_key, module_label in agent_modules.items %}
+            {% if module_key != "mindforge" %}
             <a class="menu-item-link {% if agent_active_module == module_key %}active{% endif %}" href="{% url 'agent_item_list' module_key %}">{{ module_label }}（{{ module_key }}）</a>
+            {% endif %}
             {% endfor %}
-            <a class="menu-item-link {% if current_nav == 'system_skills' %}active{% endif %}" href="{% url 'system_skill_list' %}">技能（skills）</a>
             <a class="menu-item-link {% if current_nav == 'system_rules' %}active{% endif %}" href="{% url 'system_rule_list' %}">规则（rules）</a>
         </div>
     </section>
@@ -96,6 +97,7 @@
         </a>
         <span class="user-status-chip">在线</span>
     </div>
+    <a class="sidebar-search-btn {% if current_nav == 'capability_search' %}active{% endif %}" href="{% url 'capability_search' %}">搜索</a>
     <form action="{% url 'system_settings' %}" method="post" class="user-theme-form" style="margin-top: 12px;">
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ request.get_full_path }}">

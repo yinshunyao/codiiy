@@ -1,14 +1,11 @@
 import os
-import sys
-from pathlib import Path
 
 from django.core.asgi import get_asgi_application
 
-# 兼容 ASGI 场景导入仓库级包（tools/component）。
-repo_root = Path(__file__).resolve().parent.parent.parent
-repo_root_text = str(repo_root)
-if repo_root_text not in sys.path:
-    sys.path.insert(0, repo_root_text)
+from .path_bootstrap import configure_process_project_root
+
+# 启动前支持通过环境变量覆盖项目目录；缺省时回退到 core 的上一级目录。
+configure_process_project_root()
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "reqcollector.settings")
 

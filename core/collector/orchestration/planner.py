@@ -1,11 +1,9 @@
 import json
 import re
-from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from ..models import Project
 from ..services import analyzer
-from .capability_search import search_component_functions
+from .capability_search import search_tool_functions
 from .protocol import (
     ExecutionPlan,
     PlanStep,
@@ -29,13 +27,16 @@ class CustomPlanner:
     _MAX_PLAN_STEPS_DEFAULT = 8
     _MAX_PLAN_STEPS_HARD_LIMIT = 12
     _DIRECT_TOOL_FUNCTIONS = {
-        "component.observe.understand_current_screen",
-        "component.handle.get_system_info",
-        "component.decide.text_generation",
+        "tools.file_path_tool.create_directory",
+        "tools.file_path_tool.create_file",
+        "tools.file_operator_tool.read_file",
+        "tools.file_operator_tool.write_file",
+        "tools.file_operator_tool.append_file",
+        "tools.file_operator_tool.replace_file_text",
+        "tools.macos_terminal_tool.run_command",
     }
 
     def __init__(self):
-        self._function_to_component = self._load_component_index_mapping()
         self.last_plan_meta: Dict[str, Dict] = {"token_usage": {}}
 
     def build_plan(
@@ -45,6 +46,7 @@ class CustomPlanner:
         allowed_control_modules: List[str],
         allowed_control_components: List[str],
         allowed_control_functions: List[str],
+        allowed_toolsets: Optional[List[str]] = None,
         capability_search_mode: str = "hybrid",
         model_id: str = "",
         system_prompt: str = "",
@@ -54,6 +56,7 @@ class CustomPlanner:
         normalized_max_steps = self._normalize_max_plan_steps(max_plan_steps)
         candidate_tools = self._collect_candidate_tools(
             query=query,
+            allowed_toolsets=allowed_toolsets,
             allowed_control_modules=allowed_control_modules,
             allowed_control_components=allowed_control_components,
             allowed_control_functions=allowed_control_functions,
@@ -71,20 +74,23 @@ class CustomPlanner:
             max_plan_steps=normalized_max_steps,
         )
         if llm_plan:
-            return llm_plan
+            return self._optimize_plan_for_query(query=query, plan=llm_plan)
 
-        return self._build_rule_based_plan(
+        rule_plan = self._build_rule_based_plan(
             query=query,
             allowed_agent_modules=allowed_agent_modules,
+            allowed_control_modules=allowed_control_modules,
             allowed_control_components=allowed_control_components,
             allowed_control_functions=allowed_control_functions,
             candidate_tools=candidate_tools,
             max_plan_steps=normalized_max_steps,
         )
+        return self._optimize_plan_for_query(query=query, plan=rule_plan)
 
     def _resolve_tool_target(
         self,
         query: str,
+        allowed_toolsets: List[str],
         allowed_control_modules: List[str],
         allowed_control_components: List[str],
         allowed_control_functions: List[str],
@@ -94,9 +100,30 @@ class CustomPlanner:
         将自然语言任务映射到可调用组件函数。
         仅做安全的最小映射，避免越权调用。
         """
-        matched_items, _ = search_component_functions(
+        lower_query = str(query or "").lower()
+        if any(marker in lower_query for marker in ["创建", "新建", "文件夹", "目录"]):
+            if self._is_tool_authorized(
+                function_path="tools.file_path_tool.create_directory",
+                allowed_toolsets=allowed_toolsets,
+                allowed_control_modules=allowed_control_modules,
+                allowed_control_components=allowed_control_components,
+                allowed_control_functions=allowed_control_functions,
+            ):
+                return "tools.file_path_tool.create_directory"
+
+        if self._is_disk_space_query(lower_query):
+            if self._is_tool_authorized(
+                function_path="tools.macos_terminal_tool.run_command",
+                allowed_toolsets=allowed_toolsets,
+                allowed_control_modules=allowed_control_modules,
+                allowed_control_components=allowed_control_components,
+                allowed_control_functions=allowed_control_functions,
+            ):
+                return "tools.macos_terminal_tool.run_command"
+
+        matched_items, _ = search_tool_functions(
             query=query,
-            allowed_control_modules=allowed_control_modules,
+            allowed_toolsets=allowed_toolsets,
             search_mode=capability_search_mode,
             search_engine="auto",
             top_k=1,
@@ -105,11 +132,12 @@ class CustomPlanner:
             top_item = matched_items[0]
             top_path = str(top_item.get("path") or "").strip()
             if (
-                top_path.startswith("component.")
+                top_path.startswith("tools.")
                 and float(top_item.get("score") or 0.0) >= 0.08
                 and self._is_direct_tool_function(top_path)
                 and self._is_tool_authorized(
                     function_path=top_path,
+                    allowed_toolsets=allowed_toolsets,
                     allowed_control_modules=allowed_control_modules,
                     allowed_control_components=allowed_control_components,
                     allowed_control_functions=allowed_control_functions,
@@ -117,56 +145,25 @@ class CustomPlanner:
             ):
                 return top_path
 
-        # 关键词规则作为兜底，避免检索缓存异常时完全不可用。
-        lower_query = str(query or "").lower()
-        if "observe" in allowed_control_modules or "观察" in lower_query or "截图" in lower_query:
-            if self._is_tool_authorized(
-                function_path="component.observe.understand_current_screen",
-                allowed_control_modules=allowed_control_modules,
-                allowed_control_components=allowed_control_components,
-                allowed_control_functions=allowed_control_functions,
-            ):
-                return "component.observe.understand_current_screen"
-        if "handle" in allowed_control_modules and ("系统信息" in lower_query or "system" in lower_query):
-            if self._is_tool_authorized(
-                function_path="component.handle.get_system_info",
-                allowed_control_modules=allowed_control_modules,
-                allowed_control_components=allowed_control_components,
-                allowed_control_functions=allowed_control_functions,
-            ):
-                return "component.handle.get_system_info"
-        if "decide" in allowed_control_modules and ("决策" in lower_query or "分析" in lower_query):
-            if self._is_tool_authorized(
-                function_path="component.decide.text_generation",
-                allowed_control_modules=allowed_control_modules,
-                allowed_control_components=allowed_control_components,
-                allowed_control_functions=allowed_control_functions,
-            ):
-                return "component.decide.text_generation"
         return ""
 
     def _collect_candidate_tools(
         self,
         query: str,
+        allowed_toolsets: List[str],
         allowed_control_modules: List[str],
         allowed_control_components: List[str],
         allowed_control_functions: List[str],
         capability_search_mode: str,
     ) -> List[str]:
-        allowed_modules = {str(item or "").strip() for item in (allowed_control_modules or []) if str(item or "").strip()}
-        if not allowed_modules:
+        allowed_toolset_set = {str(item or "").strip() for item in (allowed_toolsets or []) if str(item or "").strip()}
+        if not allowed_toolset_set:
             return []
-        allowed_components = {
-            str(item or "").strip() for item in (allowed_control_components or []) if str(item or "").strip()
-        }
-        allowed_functions = {
-            str(item or "").strip() for item in (allowed_control_functions or []) if str(item or "").strip()
-        }
 
         collected: List[str] = []
-        matched_items, _ = search_component_functions(
+        matched_items, _ = search_tool_functions(
             query=query,
-            allowed_control_modules=list(allowed_modules),
+            allowed_toolsets=list(allowed_toolset_set),
             search_mode=capability_search_mode,
             search_engine="auto",
             top_k=12,
@@ -174,50 +171,30 @@ class CustomPlanner:
         for item in matched_items:
             path = str(item.get("path") or "").strip()
             score = float(item.get("score") or 0.0)
-            if not path.startswith("component.") or score < 0.02:
+            if not path.startswith("tools.") or score < 0.02:
                 continue
             if not self._is_direct_tool_function(path):
                 continue
             if not self._is_tool_authorized(
                 function_path=path,
-                allowed_control_modules=list(allowed_modules),
-                allowed_control_components=list(allowed_components),
-                allowed_control_functions=list(allowed_functions),
+                allowed_toolsets=list(allowed_toolset_set),
+                allowed_control_modules=allowed_control_modules,
+                allowed_control_components=allowed_control_components,
+                allowed_control_functions=allowed_control_functions,
             ):
                 continue
             collected.append(path)
 
         fallback_target = self._resolve_tool_target(
             query=query,
-            allowed_control_modules=list(allowed_modules),
-            allowed_control_components=list(allowed_components),
-            allowed_control_functions=list(allowed_functions),
+            allowed_toolsets=list(allowed_toolset_set),
+            allowed_control_modules=allowed_control_modules,
+            allowed_control_components=allowed_control_components,
+            allowed_control_functions=allowed_control_functions,
             capability_search_mode=capability_search_mode,
         )
         if fallback_target:
-            collected.append(fallback_target)
-
-        if "observe" in allowed_modules and self._is_tool_authorized(
-            function_path="component.observe.understand_current_screen",
-            allowed_control_modules=list(allowed_modules),
-            allowed_control_components=list(allowed_components),
-            allowed_control_functions=list(allowed_functions),
-        ):
-            collected.append("component.observe.understand_current_screen")
-        if "handle" in allowed_modules and self._is_tool_authorized(
-            function_path="component.handle.get_system_info",
-            allowed_control_modules=list(allowed_modules),
-            allowed_control_components=list(allowed_components),
-            allowed_control_functions=list(allowed_functions),
-        ):
-            collected.append("component.handle.get_system_info")
-        if "decide" in allowed_modules and self._is_tool_authorized(
-            function_path="component.decide.text_generation",
-            allowed_control_modules=list(allowed_modules),
-            allowed_control_components=list(allowed_components),
-            allowed_control_functions=list(allowed_functions),
-        ):
-            collected.append("component.decide.text_generation")
+            collected.insert(0, fallback_target)
 
         return self._unique_keep_order(collected)
 
@@ -315,12 +292,13 @@ class CustomPlanner:
                 if target != "helm" or target not in allowed_agents:
                     continue
             elif step_type == STEP_TYPE_TOOL:
-                if not target.startswith("component."):
+                if not target.startswith("tools."):
                     continue
                 if not self._is_direct_tool_function(target):
                     continue
                 if not self._is_tool_authorized(
                     function_path=target,
+                    allowed_toolsets=[],
                     allowed_control_modules=list(allowed_controls),
                     allowed_control_components=allowed_control_components,
                     allowed_control_functions=allowed_control_functions,
@@ -343,7 +321,7 @@ class CustomPlanner:
                 step_input["fallback_targets"] = self._build_tool_fallback_targets(
                     primary_target=target,
                     llm_fallback_targets=llm_fallback_targets,
-                    candidate_tools=[],
+                    candidate_tools=list(candidate_tools or []),
                     allowed_control_modules=list(allowed_controls),
                     allowed_control_components=allowed_control_components,
                     allowed_control_functions=allowed_control_functions,
@@ -387,6 +365,7 @@ class CustomPlanner:
         self,
         query: str,
         allowed_agent_modules: List[str],
+        allowed_control_modules: List[str],
         allowed_control_components: List[str],
         allowed_control_functions: List[str],
         candidate_tools: List[str],
@@ -395,7 +374,11 @@ class CustomPlanner:
         plan = ExecutionPlan.new_plan(goal=query or "处理用户任务")
         steps: List[PlanStep] = []
 
-        if "mindforge" in set(allowed_agent_modules or []) and len(steps) < max(0, max_plan_steps - 1):
+        allow_mindforge = "mindforge" in set(allowed_agent_modules or [])
+        allow_helm = "helm" in set(allowed_agent_modules or [])
+        lightweight_with_tools = bool(candidate_tools) and self._is_lightweight_direct_query(query)
+
+        if allow_mindforge and not lightweight_with_tools and len(steps) < max(0, max_plan_steps - 1):
             steps.append(
                 PlanStep(
                     step_id="step_agent_mindforge",
@@ -406,7 +389,7 @@ class CustomPlanner:
                 )
             )
 
-        if "helm" in set(allowed_agent_modules or []) and len(steps) < max(0, max_plan_steps - 1):
+        if allow_helm and self._should_run_helm_step(query) and len(steps) < max(0, max_plan_steps - 1):
             steps.append(
                 PlanStep(
                     step_id="step_command_helm",
@@ -420,6 +403,15 @@ class CustomPlanner:
         if candidate_tools and len(steps) < max(0, max_plan_steps - 1):
             depends = [item.step_id for item in steps if item.step_type == STEP_TYPE_AGENT]
             primary_tool = candidate_tools[0]
+            fallback_targets = self._build_tool_fallback_targets(
+                primary_target=primary_tool,
+                llm_fallback_targets=[],
+                candidate_tools=list(candidate_tools or []),
+                allowed_control_modules=allowed_control_modules,
+                allowed_control_components=allowed_control_components,
+                allowed_control_functions=allowed_control_functions,
+                limit=3,
+            )
             steps.append(
                 PlanStep(
                     step_id="step_tool_component",
@@ -427,7 +419,7 @@ class CustomPlanner:
                     target=primary_tool,
                     input={
                         "query": query,
-                        "fallback_targets": [],
+                        "fallback_targets": fallback_targets,
                     },
                     depends_on=depends,
                 )
@@ -439,7 +431,10 @@ class CustomPlanner:
                 step_id="step_summarize",
                 step_type=STEP_TYPE_SUMMARIZE,
                 target="answer_synthesizer",
-                input={"query": query},
+                input={
+                    "query": query,
+                    "enable_completion_signal": not lightweight_with_tools,
+                },
                 depends_on=summarize_depends,
             )
         )
@@ -447,6 +442,92 @@ class CustomPlanner:
         plan.steps = steps
         plan.final_strategy = "synthesize_step_outputs"
         return plan
+
+    def _optimize_plan_for_query(self, query: str, plan: ExecutionPlan) -> ExecutionPlan:
+        if not isinstance(plan, ExecutionPlan):
+            return plan
+        raw_steps = list(plan.steps or [])
+        if not raw_steps:
+            return plan
+
+        non_summarize_steps = [item for item in raw_steps if item.step_type != STEP_TYPE_SUMMARIZE]
+        has_tool_step = any(item.step_type == STEP_TYPE_TOOL for item in non_summarize_steps)
+        lightweight_with_tools = has_tool_step and self._is_lightweight_direct_query(query)
+
+        filtered_steps: List[PlanStep] = []
+        for item in non_summarize_steps:
+            if item.step_type == STEP_TYPE_COMMAND and not self._should_run_helm_step(query):
+                continue
+            if lightweight_with_tools and item.step_type in {STEP_TYPE_AGENT, STEP_TYPE_COMMAND}:
+                continue
+            filtered_steps.append(item)
+
+        summarize_step = None
+        for item in raw_steps:
+            if item.step_type == STEP_TYPE_SUMMARIZE:
+                summarize_step = item
+                break
+        if not summarize_step:
+            summarize_step = PlanStep(
+                step_id="step_summarize",
+                step_type=STEP_TYPE_SUMMARIZE,
+                target="answer_synthesizer",
+                input={},
+                depends_on=[],
+            )
+        summarize_input = dict(summarize_step.input or {})
+        summarize_input["query"] = str(query or "").strip()
+        summarize_input["enable_completion_signal"] = not lightweight_with_tools
+        summarize_step.input = summarize_input
+        summarize_step.depends_on = [item.step_id for item in filtered_steps]
+
+        plan.steps = filtered_steps + [summarize_step]
+        return plan
+
+    @staticmethod
+    def _should_run_helm_step(query: str) -> bool:
+        text = str(query or "").strip().lower()
+        if not text:
+            return False
+        markers = [
+            "整理需求",
+            "原始需求",
+            "需求整理",
+            "需求归纳",
+            "进入整理",
+            "完成整理",
+            "确认完成",
+            "收集完成",
+            "生成需求文档",
+            "提炼需求",
+        ]
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _is_lightweight_direct_query(query: str) -> bool:
+        text = str(query or "").strip().lower()
+        if not text:
+            return False
+        if len(text) > 120:
+            return False
+        complex_markers = ["先", "再", "然后", "并且", "同时", "分步", "步骤", "并行", "如果", "否则"]
+        if any(marker in text for marker in complex_markers):
+            return False
+        mutation_markers = ["创建", "新建", "写入", "修改", "删除", "重命名", "移动", "安装", "部署", "实现", "规划"]
+        if any(marker in text for marker in mutation_markers):
+            return False
+        intent_markers = ["查询", "查看", "获取", "显示", "告诉我", "看看", "多少", "剩余", "剩下", "状态"]
+        observe_targets = ["磁盘", "空间", "内存", "cpu", "系统", "目录", "文件", "时间", "日期", "端口", "进程"]
+        return any(marker in text for marker in intent_markers) and any(marker in text for marker in observe_targets)
+
+    @staticmethod
+    def _is_disk_space_query(lower_query: str) -> bool:
+        text = str(lower_query or "").strip().lower()
+        if not text:
+            return False
+        disk_markers = ["磁盘", "disk", "df -h", "可用空间", "剩余空间", "avail", "volume", "/system/volumes/data"]
+        observe_markers = ["查询", "查看", "获取", "多少", "剩余", "可用", "观测"]
+        return any(item in text for item in disk_markers) and any(item in text for item in observe_markers)
 
     @staticmethod
     def _normalize_max_plan_steps(value: int) -> int:
@@ -473,55 +554,26 @@ class CustomPlanner:
             return text[start : end + 1].strip()
         return ""
 
-    @staticmethod
-    def _extract_component_module(function_path: str) -> str:
-        parts = [item.strip() for item in str(function_path or "").split(".") if item.strip()]
-        if len(parts) >= 2:
-            return parts[1]
-        return ""
-
     def _is_tool_authorized(
         self,
         function_path: str,
         allowed_control_modules: List[str],
         allowed_control_components: List[str],
         allowed_control_functions: List[str],
+        allowed_toolsets: Optional[List[str]] = None,
     ) -> bool:
         normalized_path = str(function_path or "").strip()
-        module_name = self._extract_component_module(normalized_path)
-        allowed_module_set = {
-            str(item or "").strip() for item in (allowed_control_modules or []) if str(item or "").strip()
-        }
-        if module_name not in allowed_module_set:
+        parts = [item.strip() for item in normalized_path.split(".") if item.strip()]
+        if len(parts) < 3 or parts[0] != "tools":
             return False
-        allowed_component_set = {
-            str(item or "").strip() for item in (allowed_control_components or []) if str(item or "").strip()
-        }
-        if allowed_component_set:
-            component_key = str(self._function_to_component.get(normalized_path, "") or "").strip()
-            if not component_key or component_key not in allowed_component_set:
-                return False
-        allowed_function_set = {
-            str(item or "").strip() for item in (allowed_control_functions or []) if str(item or "").strip()
-        }
-        if allowed_function_set and normalized_path not in allowed_function_set:
+        toolset_key = parts[1]
+        allowed_toolset_set = {str(item or "").strip() for item in (allowed_toolsets or []) if str(item or "").strip()}
+        if allowed_toolset_set and toolset_key not in allowed_toolset_set:
             return False
         return True
 
     def _is_direct_tool_function(self, function_path: str) -> bool:
         return str(function_path or "").strip() in self._DIRECT_TOOL_FUNCTIONS
-
-    @staticmethod
-    def _load_component_index_mapping() -> Dict[str, str]:
-        try:
-            index_file = Path(Project.get_core_project_path()) / "component" / "component_index.json"
-            data = json.loads(index_file.read_text(encoding="utf-8"))
-            mapping = data.get("function_to_component", {}) if isinstance(data, dict) else {}
-            if not isinstance(mapping, dict):
-                return {}
-            return {str(k): str(v) for k, v in mapping.items()}
-        except Exception:
-            return {}
 
     @staticmethod
     def _unique_keep_order(items: List[str]) -> List[str]:
@@ -559,12 +611,13 @@ class CustomPlanner:
             normalized = str(path or "").strip()
             if not normalized or normalized == normalized_primary:
                 continue
-            if not normalized.startswith("component."):
+            if not normalized.startswith("tools."):
                 continue
             if not self._is_tool_strongly_related(normalized_primary, normalized):
                 continue
             if allowed_control_modules and not self._is_tool_authorized(
                 function_path=normalized,
+                allowed_toolsets=[],
                 allowed_control_modules=allowed_control_modules,
                 allowed_control_components=allowed_control_components,
                 allowed_control_functions=allowed_control_functions,
@@ -580,14 +633,14 @@ class CustomPlanner:
         candidate = str(candidate_target or "").strip()
         if not primary or not candidate:
             return False
-        if self._extract_component_module(primary) != self._extract_component_module(candidate):
+        primary_parts = [item.strip() for item in primary.split(".") if item.strip()]
+        candidate_parts = [item.strip() for item in candidate.split(".") if item.strip()]
+        if len(primary_parts) < 3 or len(candidate_parts) < 3:
             return False
-
-        primary_component = str(self._function_to_component.get(primary, "") or "").strip()
-        candidate_component = str(self._function_to_component.get(candidate, "") or "").strip()
-        # 当存在组件映射时，优先要求同组件，避免跨组件盲试。
-        if primary_component and candidate_component:
-            return primary_component == candidate_component
+        if primary_parts[0] != "tools" or candidate_parts[0] != "tools":
+            return False
+        if primary_parts[1] != candidate_parts[1]:
+            return False
         return True
 
     @staticmethod

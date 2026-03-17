@@ -1,4 +1,6 @@
 {
   "handle.python_package_component": true,
-  "handle.file_reader_component": true
+  "handle.file_reader_component": true,
+  "observe.screen_understand_component": false,
+  "observe.screen_capture_component": false
 }

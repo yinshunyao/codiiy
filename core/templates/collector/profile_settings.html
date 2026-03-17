@@ -101,6 +101,66 @@
                 </div>
 
                 <div class="panel settings-card">
+                    <h2 style="margin-top: 0;">权限限制</h2>
+                    <div class="meta" style="margin-top: 4px;">
+                        当前状态：
+                        {% if permission_restriction_enabled %}
+                        已开启（按伙伴白名单限制）
+                        {% else %}
+                        已关闭（调试模式，不限制伙伴工具调用）
+                        {% endif %}
+                    </div>
+                    <form method="post" action="{% url 'system_settings' %}" style="margin-top: 14px;">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{% url 'profile_settings' %}">
+                        <input
+                            type="hidden"
+                            name="permission_restriction_enabled"
+                            id="permissionRestrictionValue"
+                            value="{% if permission_restriction_enabled %}true{% else %}false{% endif %}"
+                        >
+                        <div class="profile-theme-row">
+                            <span class="meta" style="margin: 0;">关闭</span>
+                            <label class="profile-theme-toggle" for="permissionRestrictionToggle">
+                                <input
+                                    id="permissionRestrictionToggle"
+                                    type="checkbox"
+                                    {% if permission_restriction_enabled %}checked{% endif %}
+                                >
+                                <span class="profile-theme-slider"></span>
+                            </label>
+                            <span class="meta" style="margin: 0;">开启</span>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="panel settings-card">
+                    <h2 style="margin-top: 0;">自主规划看门狗</h2>
+                    <div class="meta" style="margin-top: 4px;">
+                        仅作用于“最后一步汇总答案”阶段：当连续无响应超过阈值时自动终止任务。
+                    </div>
+                    <form method="post" action="{% url 'system_settings' %}" style="margin-top: 14px;">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{% url 'profile_settings' %}">
+                        <label for="companionFinalStepWatchdogSeconds" class="meta">无响应超时时间（秒）</label>
+                        <input
+                            id="companionFinalStepWatchdogSeconds"
+                            name="companion_final_step_watchdog_seconds"
+                            type="number"
+                            min="10"
+                            step="1"
+                            class="form-mindforge"
+                            value="{{ companion_final_step_watchdog_seconds|default:180|floatformat:0 }}"
+                            style="margin-top: 8px; max-width: 220px;"
+                        >
+                        <div class="meta" style="margin-top: 8px;">默认 180 秒，最小 10 秒。</div>
+                        <div style="margin-top: 12px;">
+                            <button type="submit" class="ghost-btn">保存看门狗阈值</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="panel settings-card">
                     <h2 style="margin-top: 0;">会话</h2>
                     <div class="meta" style="margin-top: 4px;">退出登录后需要重新认证。</div>
                     <form action="{% url 'logout' %}" method="post" style="margin-top: 12px;">
@@ -130,6 +190,19 @@
         }
         toggle.addEventListener("change", function () {
             valueInput.value = toggle.checked ? "light" : "dark";
+            form.submit();
+        });
+    })();
+
+    (function () {
+        const toggle = document.getElementById("permissionRestrictionToggle");
+        const valueInput = document.getElementById("permissionRestrictionValue");
+        const form = valueInput ? valueInput.form : null;
+        if (!toggle || !valueInput || !form) {
+            return;
+        }
+        toggle.addEventListener("change", function () {
+            valueInput.value = toggle.checked ? "true" : "false";
             form.submit();
         });
     })();

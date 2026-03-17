@@ -1,5 +1,5 @@
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 @dataclass
@@ -21,6 +21,7 @@ class ReActStepRecord:
     observation: str = ""
     raw_model_output: str = ""
     error: str = ""
+    token_usage: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -52,3 +53,8 @@ class ReActEngineConfig:
     temperature: float = 0.2
     max_tokens: int = 1024
     use_langgraph_if_available: bool = True
+    max_same_failure_repeats: int = 2
+    stop_on_non_retryable_failure: bool = True
+    stop_checker: Optional[Callable[[], bool]] = None
+    event_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+

@@ -22,6 +22,11 @@ urlpatterns = [
         name="chat_reply_task_stop",
     ),
     path(
+        "sessions/<int:session_id>/reply-task/<int:task_id>/interaction-submit/",
+        views.chat_reply_task_interaction_submit,
+        name="chat_reply_task_interaction_submit",
+    ),
+    path(
         "sessions/<int:session_id>/extract-summary/<int:message_id>/",
         views.session_extract_summary,
         name="session_extract_summary",
@@ -51,6 +56,7 @@ urlpatterns = [
     path("models/local/<int:config_id>/edit/", views.local_llm_config_edit, name="local_llm_config_edit"),
     path("models/local/<int:config_id>/delete/", views.local_llm_config_delete, name="local_llm_config_delete"),
     path("models/local/<int:config_id>/runtime/", views.local_llm_runtime_action, name="local_llm_runtime_action"),
+    path("search/", views.capability_search, name="capability_search"),
     path("tools/sets/", views.toolset_list, name="toolset_list"),
     path("agents/<str:module_name>/", views.agent_item_list, name="agent_item_list"),
     path(
@@ -105,4 +111,9 @@ urlpatterns = [
     path("api/llm-providers/", views.llm_provider_list, name="llm_provider_list"),
     path("api/llm-providers/<int:provider_id>/models/", views.llm_model_list, name="llm_model_list"),
     path("api/projects/<int:project_id>/set-llm/", views.project_set_llm, name="project_set_llm"),
+    path(
+        "api/companions/<int:companion_id>/set-mindforge-strategy/",
+        views.companion_set_mindforge_strategy,
+        name="companion_set_mindforge_strategy",
+    ),
 ]

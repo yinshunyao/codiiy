@@ -209,6 +209,54 @@ class MacosTerminalTool:
             read_incremental_output=read_incremental_output,
         )
 
+    def run_command(
+        self,
+        command: str,
+        cwd: str = "",
+        shell_mode: str = "zsh",
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        """一次性命令执行：创建会话 -> 执行命令 -> 关闭会话。"""
+        normalized_command = str(command or "").strip()
+        if not normalized_command:
+            return {"success": False, "error": "command 不能为空"}
+
+        create_result = self.create_terminal_object(cwd=cwd, shell_mode=shell_mode)
+        if not create_result.get("success"):
+            return create_result
+        object_id = str(((create_result.get("data") or {}).get("object_id")) or "").strip()
+        if not object_id:
+            return {"success": False, "error": "创建终端对象失败：缺少 object_id"}
+
+        close_result: Dict[str, Any] = {}
+        try:
+            execute_result = self.input_output(
+                object_id=object_id,
+                command=normalized_command,
+                timeout_seconds=timeout_seconds,
+                read_incremental_output=False,
+            )
+            if not execute_result.get("success"):
+                return execute_result
+            execute_data = execute_result.get("data") or {}
+            input_result = execute_data.get("input_result") or {}
+            return {
+                "success": True,
+                "data": {
+                    "object_id": str(execute_data.get("object_id") or object_id),
+                    "session_id": str(execute_data.get("session_id") or ""),
+                    "command": str(input_result.get("command") or normalized_command),
+                    "exit_code": input_result.get("exit_code"),
+                    "stdout": str(input_result.get("output") or ""),
+                    "stderr": "",
+                },
+            }
+        finally:
+            close_result = self.close_terminal_object(object_id=object_id)
+            if not close_result.get("success"):
+                # 会话关闭失败不影响主执行结果，只在返回中补充提示由调用方决定是否关注。
+                pass
+
     def read_output(
         self,
         object_id: str,

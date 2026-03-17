@@ -15,9 +15,9 @@ class AgentManagerTestCase(unittest.TestCase):
 
         self._create_agent_item(
             module_name="mindforge",
-            item_name="react_engine",
-            readme="# React Engine\ndescription: 负责 ReAct 推理执行。\n",
-            files=["engine.py", "models.py", "__init__.py"],
+            item_name="react_strategy",
+            readme="# React Strategy\ndescription: 负责 ReAct 推理执行。\n",
+            files=["api.py", "engine.py", "__init__.py"],
         )
         self._create_agent_item(
             module_name="helm",
@@ -25,7 +25,6 @@ class AgentManagerTestCase(unittest.TestCase):
             readme="# Requirement Command\n用于会话状态流转。\n",
             files=["command.py", "__init__.py"],
         )
-
         self.original_agents_root = manager._AGENTS_ROOT
         self.original_state_path = manager._STATE_PATH
         manager._AGENTS_ROOT = self.agents_root
@@ -39,7 +38,7 @@ class AgentManagerTestCase(unittest.TestCase):
     def test_list_agent_items_should_return_module_items(self):
         mindforge_items = manager.list_agent_items(module_name="mindforge", keyword="")
         self.assertEqual(len(mindforge_items), 1)
-        self.assertEqual(mindforge_items[0]["name"], "react_engine")
+        self.assertEqual(mindforge_items[0]["name"], "react_strategy")
         self.assertIn("engine.py", mindforge_items[0]["key_files"])
 
     def test_get_and_set_agent_enabled_should_persist(self):
@@ -55,6 +54,14 @@ class AgentManagerTestCase(unittest.TestCase):
         self.assertEqual(normalized, "requirement_session_command")
         self.assertTrue(target and target.is_dir())
         self.assertEqual(error, "")
+
+    def test_manager_should_include_skills_module_and_allow_empty_items(self):
+        modules = manager.list_agent_modules()
+        module_names = {item["module_name"] for item in modules}
+        self.assertIn("skills", module_names)
+
+        skills_items = manager.list_agent_items(module_name="skills", keyword="")
+        self.assertEqual(skills_items, [])
 
     def _create_agent_item(self, module_name: str, item_name: str, readme: str, files):
         item_dir = self.agents_root / module_name / item_name

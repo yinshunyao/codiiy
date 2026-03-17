@@ -218,6 +218,26 @@
     font-size: 12px;
     background: var(--user-chip-bg);
 }
+.sidebar-search-btn {
+    margin-top: 10px;
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 34px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    color: var(--text);
+    background: var(--panel-2);
+    text-decoration: none;
+    font-size: 13px;
+}
+.sidebar-search-btn:hover,
+.sidebar-search-btn.active {
+    text-decoration: none;
+    border-color: var(--line);
+    background: var(--menu-section-hover-bg);
+}
 .user-theme-form {
     display: flex;
     align-items: center;

@@ -12,6 +12,7 @@ class ToolsetManagerTestCase(unittest.TestCase):
         self.tools_root = self.temp_dir / "tools"
         self.tools_root.mkdir(parents=True, exist_ok=True)
         self.state_path = self.tools_root / "toolset_state.json"
+        self.source_path = self.tools_root / "toolset_source.json"
 
         self._create_toolset(
             "knowledge_curation_tool",
@@ -26,12 +27,15 @@ class ToolsetManagerTestCase(unittest.TestCase):
 
         self.original_toolset_root = manager._TOOLSET_ROOT
         self.original_state_path = manager._STATE_PATH
+        self.original_source_path = manager._SOURCE_PATH
         manager._TOOLSET_ROOT = self.tools_root
         manager._STATE_PATH = self.state_path
+        manager._SOURCE_PATH = self.source_path
 
     def tearDown(self):
         manager._TOOLSET_ROOT = self.original_toolset_root
         manager._STATE_PATH = self.original_state_path
+        manager._SOURCE_PATH = self.original_source_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_list_toolsets_should_filter_by_keyword_and_os(self):
@@ -61,6 +65,41 @@ class ToolsetManagerTestCase(unittest.TestCase):
         manager.set_toolset_enabled("knowledge_curation_tool", False)
         with self.assertRaises(RuntimeError):
             manager.assert_toolset_enabled("tools.knowledge_curation_tool.knowledge_curation_tool")
+
+    def test_list_enabled_toolsets_should_hide_disabled_items(self):
+        manager.set_toolset_enabled("knowledge_curation_tool", False)
+        enabled_items = manager.list_enabled_toolsets(keyword="", selected_os="all")
+        enabled_names = [item["name"] for item in enabled_items]
+        self.assertNotIn("knowledge_curation_tool", enabled_names)
+        self.assertIn("rule_reader", enabled_names)
+
+    def test_filter_enabled_toolsets_should_remove_disabled_and_invalid(self):
+        manager.set_toolset_enabled("knowledge_curation_tool", False)
+        filtered = manager.filter_enabled_toolsets(
+            ["knowledge_curation_tool", "rule_reader", "missing_toolset", "rule_reader"]
+        )
+        self.assertEqual(filtered, ["rule_reader"])
+
+    def test_toolset_source_should_default_native_and_support_set(self):
+        default_source = manager.get_toolset_source("rule_reader")
+        self.assertEqual(default_source, "native")
+
+        update_result = manager.set_toolset_source("rule_reader", "imported")
+        self.assertEqual(update_result["source"], "imported")
+        self.assertEqual(manager.get_toolset_source("rule_reader"), "imported")
+
+    def test_list_toolsets_should_support_source_filter(self):
+        manager.set_toolset_source("knowledge_curation_tool", "generated")
+        manager.set_toolset_source("rule_reader", "imported")
+
+        generated_items = manager.list_toolsets(keyword="", selected_os="all", selected_source="generated")
+        generated_names = [item["name"] for item in generated_items]
+        self.assertEqual(generated_names, ["knowledge_curation_tool"])
+        self.assertEqual(generated_items[0]["source_text"], "自生成")
+
+        imported_items = manager.list_toolsets(keyword="", selected_os="all", selected_source="imported")
+        imported_names = [item["name"] for item in imported_items]
+        self.assertEqual(imported_names, ["rule_reader"])
 
     def _create_toolset(self, name: str, readme: str, py_files):
         toolset_dir = self.tools_root / name

@@ -7,12 +7,31 @@ from typing import Any, Dict, List, Optional
 
 _TOOLSET_ROOT = Path(__file__).resolve().parent
 _STATE_PATH = _TOOLSET_ROOT / "toolset_state.json"
+_SOURCE_PATH = _TOOLSET_ROOT / "toolset_source.json"
 _SUPPORTED_SYSTEM_KEYS = ("macos", "linux", "windows")
 _OS_LABELS = {
     "all": "全部系统",
     "macos": "macOS",
     "linux": "Linux",
     "windows": "Windows",
+}
+TOOL_SOURCE_NATIVE = "native"
+TOOL_SOURCE_GENERATED = "generated"
+TOOL_SOURCE_IMPORTED = "imported"
+_TOOL_SOURCE_KEYS = (TOOL_SOURCE_NATIVE, TOOL_SOURCE_GENERATED, TOOL_SOURCE_IMPORTED)
+_TOOL_SOURCE_LABELS = {
+    TOOL_SOURCE_NATIVE: "原生",
+    TOOL_SOURCE_GENERATED: "自生成",
+    TOOL_SOURCE_IMPORTED: "导入",
+}
+_TOOL_SOURCE_ALIAS = {
+    "native": TOOL_SOURCE_NATIVE,
+    "原生": TOOL_SOURCE_NATIVE,
+    "generated": TOOL_SOURCE_GENERATED,
+    "自生成": TOOL_SOURCE_GENERATED,
+    "自动生成": TOOL_SOURCE_GENERATED,
+    "imported": TOOL_SOURCE_IMPORTED,
+    "导入": TOOL_SOURCE_IMPORTED,
 }
 
 
@@ -48,6 +67,94 @@ def _save_state(state: Dict[str, Any]) -> None:
         if isinstance(key, str):
             normalized[key] = bool(value)
     _write_json_file(_STATE_PATH, normalized)
+
+
+def _load_source_state() -> Dict[str, str]:
+    raw_state = _read_json_file(_SOURCE_PATH, {})
+    normalized: Dict[str, str] = {}
+    for key, value in raw_state.items():
+        if not isinstance(key, str):
+            continue
+        source = _normalize_tool_source(value, default="")
+        if source:
+            normalized[key] = source
+    return normalized
+
+
+def _save_source_state(state: Dict[str, Any]) -> None:
+    normalized: Dict[str, str] = {}
+    for key, value in state.items():
+        if not isinstance(key, str):
+            continue
+        source = _normalize_tool_source(value, default="")
+        if source:
+            normalized[key] = source
+    _write_json_file(_SOURCE_PATH, normalized)
+
+
+def _normalize_tool_source(raw_source: Any, default: str = TOOL_SOURCE_NATIVE) -> str:
+    source = str(raw_source or "").strip().lower()
+    if source in _TOOL_SOURCE_ALIAS:
+        return _TOOL_SOURCE_ALIAS[source]
+    return default
+
+
+def _normalize_selected_source(selected_source: str) -> str:
+    normalized = str(selected_source or "").strip().lower()
+    if normalized in {"", "all", "全部"}:
+        return "all"
+    source = _normalize_tool_source(normalized, default="")
+    return source if source else "all"
+
+
+def _read_toolset_source_from_readme(readme_path: Path) -> str:
+    if not readme_path.exists():
+        return TOOL_SOURCE_NATIVE
+    try:
+        text = readme_path.read_text(encoding="utf-8")
+    except OSError:
+        return TOOL_SOURCE_NATIVE
+    match = re.search(r"工具源\s*[:：]\s*([^\r\n]+)", text, flags=re.IGNORECASE)
+    if not match:
+        return TOOL_SOURCE_NATIVE
+    return _normalize_tool_source(match.group(1), default=TOOL_SOURCE_NATIVE)
+
+
+def get_toolset_source(toolset_key: str) -> str:
+    toolset_path = _get_toolset_path(toolset_key)
+    if not toolset_path:
+        raise KeyError(f"工具集不存在: {toolset_key}")
+    source_state = _load_source_state()
+    source = _normalize_tool_source(source_state.get(toolset_key, ""), default="")
+    if source:
+        return source
+    return _read_toolset_source_from_readme(toolset_path / "README.md")
+
+
+def set_toolset_source(toolset_key: str, source: str) -> Dict[str, Any]:
+    toolset_path = _get_toolset_path(toolset_key)
+    if not toolset_path:
+        raise KeyError(f"工具集不存在: {toolset_key}")
+    normalized_source = _normalize_tool_source(source, default="")
+    if not normalized_source:
+        raise ValueError(f"不支持的工具源: {source}")
+    source_state = _load_source_state()
+    source_state[toolset_key] = normalized_source
+    _save_source_state(source_state)
+    return {
+        "toolset_key": toolset_key,
+        "source": normalized_source,
+        "source_text": _TOOL_SOURCE_LABELS.get(normalized_source, normalized_source),
+    }
+
+
+def list_toolset_source_options(include_all: bool = True) -> List[Dict[str, str]]:
+    options: List[Dict[str, str]] = []
+    if include_all:
+        options.append({"value": "all", "label": "全部来源"})
+    for key in _TOOL_SOURCE_KEYS:
+        options.append({"value": key, "label": _TOOL_SOURCE_LABELS.get(key, key)})
+    return options
 
 
 def _iter_toolset_dirs() -> List[Path]:
@@ -200,10 +307,17 @@ def set_toolset_enabled(toolset_key: str, enabled: bool) -> Dict[str, Any]:
     return {"toolset_key": toolset_key, "enabled": bool(enabled)}
 
 
-def list_toolsets(keyword: str = "", selected_os: str = "all") -> List[Dict[str, Any]]:
+def list_toolsets(
+    keyword: str = "",
+    selected_os: str = "all",
+    selected_source: str = "all",
+    include_disabled: bool = True,
+) -> List[Dict[str, Any]]:
     normalized_keyword = str(keyword or "").strip().lower()
     normalized_os = _normalize_selected_os(selected_os)
+    normalized_source = _normalize_selected_source(selected_source)
     state = _load_state()
+    source_state = _load_source_state()
     results: List[Dict[str, Any]] = []
 
     for entry in _iter_toolset_dirs():
@@ -218,6 +332,14 @@ def list_toolsets(keyword: str = "", selected_os: str = "all") -> List[Dict[str,
         python_files = sorted(
             [item.name for item in entry.iterdir() if item.is_file() and item.suffix == ".py"]
         )
+        enabled = bool(state.get(entry.name, True))
+        if not include_disabled and not enabled:
+            continue
+        source = _normalize_tool_source(source_state.get(entry.name, ""), default="")
+        if not source:
+            source = _read_toolset_source_from_readme(readme_path)
+        if normalized_source != "all" and source != normalized_source:
+            continue
         results.append(
             {
                 "name": entry.name,
@@ -228,10 +350,41 @@ def list_toolsets(keyword: str = "", selected_os: str = "all") -> List[Dict[str,
                 "updated_at": datetime.fromtimestamp(entry.stat().st_mtime),
                 "os_support": os_support,
                 "os_support_text": _format_supported_systems_text(os_support),
-                "enabled": bool(state.get(entry.name, True)),
+                "enabled": enabled,
+                "source": source,
+                "source_text": _TOOL_SOURCE_LABELS.get(source, source),
             }
         )
     return results
+
+
+def list_enabled_toolsets(
+    keyword: str = "",
+    selected_os: str = "all",
+    selected_source: str = "all",
+) -> List[Dict[str, Any]]:
+    return list_toolsets(
+        keyword=keyword,
+        selected_os=selected_os,
+        selected_source=selected_source,
+        include_disabled=False,
+    )
+
+
+def filter_enabled_toolsets(toolset_keys: List[str]) -> List[str]:
+    result: List[str] = []
+    for raw_key in toolset_keys or []:
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        if not _get_toolset_path(key):
+            continue
+        if not get_toolset_enabled(key):
+            continue
+        if key in result:
+            continue
+        result.append(key)
+    return result
 
 
 def assert_toolset_enabled(module_path: str) -> str:
@@ -252,11 +405,46 @@ class ToolsetManager:
     def get_toolset_enabled(self, toolset_key: str) -> bool:
         return get_toolset_enabled(toolset_key)
 
+    def get_toolset_source(self, toolset_key: str) -> str:
+        return get_toolset_source(toolset_key)
+
     def set_toolset_enabled(self, toolset_key: str, enabled: bool) -> Dict[str, Any]:
         return set_toolset_enabled(toolset_key, enabled)
 
-    def list_toolsets(self, keyword: str = "", selected_os: str = "all") -> List[Dict[str, Any]]:
-        return list_toolsets(keyword=keyword, selected_os=selected_os)
+    def set_toolset_source(self, toolset_key: str, source: str) -> Dict[str, Any]:
+        return set_toolset_source(toolset_key, source)
+
+    def list_toolsets(
+        self,
+        keyword: str = "",
+        selected_os: str = "all",
+        selected_source: str = "all",
+        include_disabled: bool = True,
+    ) -> List[Dict[str, Any]]:
+        return list_toolsets(
+            keyword=keyword,
+            selected_os=selected_os,
+            selected_source=selected_source,
+            include_disabled=include_disabled,
+        )
+
+    def list_enabled_toolsets(
+        self,
+        keyword: str = "",
+        selected_os: str = "all",
+        selected_source: str = "all",
+    ) -> List[Dict[str, Any]]:
+        return list_enabled_toolsets(
+            keyword=keyword,
+            selected_os=selected_os,
+            selected_source=selected_source,
+        )
+
+    def list_toolset_source_options(self, include_all: bool = True) -> List[Dict[str, str]]:
+        return list_toolset_source_options(include_all=include_all)
+
+    def filter_enabled_toolsets(self, toolset_keys: List[str]) -> List[str]:
+        return filter_enabled_toolsets(toolset_keys)
 
     def assert_toolset_enabled(self, module_path: str) -> str:
         return assert_toolset_enabled(module_path)

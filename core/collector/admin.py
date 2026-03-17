@@ -7,6 +7,7 @@ from .models import (
     Project,
     RequirementMessage,
     RequirementSession,
+    SystemRuntimeSetting,
 )
 
 
@@ -53,4 +54,12 @@ class ComponentSystemPermissionGrantAdmin(admin.ModelAdmin):
     list_display = ("id", "module_name", "component_key", "permission_key", "is_granted", "updated_at")
     search_fields = ("module_name", "component_key", "permission_key", "permission_name", "grant_note")
     list_filter = ("module_name", "is_granted", "updated_at")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(SystemRuntimeSetting)
+class SystemRuntimeSettingAdmin(admin.ModelAdmin):
+    list_display = ("id", "key", "value_text", "updated_at")
+    search_fields = ("key", "value_text", "description")
+    list_filter = ("updated_at",)
     readonly_fields = ("created_at", "updated_at")

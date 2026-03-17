@@ -14,6 +14,10 @@ STEP_STATUS_FAILED = "failed"
 STEP_STATUS_SKIPPED = "skipped"
 
 
+class OrchestrationStoppedError(RuntimeError):
+    """编排执行收到停止请求。"""
+
+
 @dataclass
 class PlanStep:
     step_id: str
@@ -60,6 +64,7 @@ class StepResult:
     error: str = ""
     duration_ms: int = 0
     executor: str = ""
+    trace: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -69,6 +74,7 @@ class StepResult:
             "error": self.error,
             "duration_ms": self.duration_ms,
             "executor": self.executor,
+            "trace": self.trace,
         }
 
 

@@ -36,6 +36,19 @@
       "supported_systems": ["macos", "linux", "windows"],
       "version": "1.0.0"
     },
+    "handle.file_writer_component": {
+      "module": "handle",
+      "component_dir": "component/handle/file_writer_component",
+      "export_functions": [
+        "component.handle.create_file",
+        "component.handle.write_file",
+        "component.handle.append_file",
+        "component.handle.replace_file_text"
+      ],
+      "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
+      "version": "1.0.0"
+    },
     "handle.mouse_action_component": {
       "module": "handle",
       "component_dir": "component/handle/mouse_action_component",
@@ -129,6 +142,10 @@
     "component.handle.search_regex": "handle.file_reader_component",
     "component.handle.get_file_stats": "handle.file_reader_component",
     "component.handle.get_system_info": "handle.file_reader_component",
+    "component.handle.create_file": "handle.file_writer_component",
+    "component.handle.write_file": "handle.file_writer_component",
+    "component.handle.append_file": "handle.file_writer_component",
+    "component.handle.replace_file_text": "handle.file_writer_component",
     "component.handle.mouse_click": "handle.mouse_action_component",
     "component.handle.mouse_double_click": "handle.mouse_action_component",
     "component.handle.mouse_move": "handle.mouse_action_component",

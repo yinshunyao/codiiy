@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 AGENT_MODULE_LABELS: Dict[str, str] = {
     "mindforge": "心法",
     "helm": "号令",
+    "skills": "技能",
 }
 
 _AGENTS_ROOT = Path(__file__).resolve().parent

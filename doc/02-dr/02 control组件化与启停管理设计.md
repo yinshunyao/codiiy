@@ -237,11 +237,16 @@
    - “工具集”必须位于该二级菜单第一项，组件模块菜单项顺序保持原有定义顺序。
 3. 工具集列表页能力：
    - 新增独立页面用于展示工具集列表与基础信息；
-   - 信息维度至少包含：工具集名称、目录路径、README 摘要、关键模块文件；
-   - 页面交互风格参照组件功能页，支持关键字检索和基础统计信息展示。
+   - 信息维度至少包含：工具集名称、目录路径、README 摘要、关键模块文件、当前状态（已启用/已停用）；
+   - 页面交互风格参照组件功能页，支持关键字检索和基础统计信息展示；
+   - 每个工具集项提供“启用/停用”切换按钮，按钮文案按当前状态动态切换。
 4. 数据来源与边界：
    - 工具集信息来源于 `tools` 目录结构与各工具 `README.md`；
-   - 仅做“读取与展示”，不引入工具启停写操作，不改变现有 `ComponentCallTool` 调用链路。
+   - 工具集启停状态来源于 `tools/toolset_state.json`；
+   - 工具集停用后，对智能体执行链路需满足“不可见、不可用”：
+     - 不可见：候选工具集、能力检索结果与伙伴运行时可用工具集范围中均不包含停用工具；
+     - 不可用：即使伙伴历史白名单中仍保留该工具集，运行时也必须先收敛为“仅启用工具集”后再进入编排执行；
+   - 工具集启停不改变 `component.*` 组件调用链路的既有约束，组件调用仍由组件白名单与组件启停机制控制。
 
 ### 5.11 Django 启动导入路径兼容
 为保证 Django 在不同启动方式下可稳定导入仓库级包（如 `tools`、`component`），增加以下约束：
@@ -273,21 +278,23 @@
    - 历史组件或工具缺失 OS 字段时，页面层按“全平台可见”降级处理，避免因元数据缺失导致能力不可见。
 
 ### 5.13 Django 侧边栏智能体菜单下挂技能/规则查询管理
-为满足“在 Django 平台统一查看并检索 `.cursor/skills` 与 `.cursor/rules`，并聚合到智能体导航下”的管理需求，新增以下规则：
+为满足“在 Django 平台统一查看并检索 `agents/skills` 与 `agents/rules`，并聚合到智能体导航下”的管理需求，新增以下规则：
 1. 一级菜单调整：
    - 移除独立一级菜单 `系统`；
    - 将原 `系统` 下的 `技能（skills）`、`规则（rules）` 迁移到一级菜单 `智能体（agents）` 下；
    - 侧边栏保持 `聊天`、`智能体（agents）`、`工具组件`、`设置` 的一级结构。
 2. 二级菜单归并：
-   - 在 `智能体（agents）` 下保留并扩展二级菜单项：`心法（mindforge）`、`号令（helm）`、`技能（skills）`、`规则（rules）`；
-   - 点击各二级菜单进入对应查询管理页。
+   - 在 `智能体（agents）` 下对用户开放并展示的二级菜单项为：`号令（helm）`、`技能（skills）`、`规则（rules）`；
+   - `心法（mindforge）` 入口不在侧边栏对用户展示（界面隐藏，不对用户开放）；
+   - 点击已展示的二级菜单进入对应查询管理页。
+   - `skills` 菜单入口统一由 `agent_modules` 循环渲染，不再额外增加固定 `skills` 二级菜单，避免重复入口。
 3. 技能列表页能力：
-   - 数据来源为仓库目录 `.cursor/skills`；
+   - 数据来源为仓库目录 `agents/skills`；
    - 列表展示至少包含：技能名、目录路径、`SKILL.md` 是否存在、摘要信息、关键文件清单；
    - 摘要优先读取 `SKILL.md` 中的 `description` 字段，缺失时再使用文本首段降级；
    - 支持关键字检索（名称、路径、摘要文本匹配）。
 4. 规则列表页能力：
-   - 数据来源为仓库目录 `.cursor/rules`；
+   - 数据来源为仓库目录 `agents/rules`；
    - 列表展示至少包含：规则文件名、文件路径、摘要信息、更新时间；
    - 摘要优先读取规则文档中的 `description` 字段，缺失时再使用文本首段降级；
    - 支持关键字检索（文件名、路径、摘要文本匹配）；
@@ -309,7 +316,7 @@
    - 支持在详情页直接编辑并保存文件内容；
    - 保存成功后停留在当前详情页并提示成功信息。
 4. 安全与边界：
-   - 必须执行路径安全校验，禁止目录穿越（只允许访问 `.cursor/rules` 目录范围内文件）；
+   - 必须执行路径安全校验，禁止目录穿越（只允许访问 `agents/rules` 目录范围内文件）；
    - 非 `.md` 或不可编辑文件返回明确提示，不执行写入；
    - 文件不存在、读写失败等异常场景需友好提示，不返回 500。
 
@@ -320,7 +327,7 @@
    - 点击后将该技能目录打包为单个 zip 并下载。
 2. 导入能力：
    - 技能列表页提供“导入技能”入口，支持上传 zip；
-   - 上传后按单技能目录解压到 `.cursor/skills/<skill_name>` 对应目录下。
+   - 上传后按单技能目录解压到 `agents/skills/<skill_name>` 对应目录下。
 3. 压缩包约束：
    - zip 需只包含一个顶层技能目录；
    - 顶层目录名作为技能目录名。
@@ -344,11 +351,15 @@
    - 支持输入命令并同步返回本次执行输出（含退出码）；
    - 支持按 offset 增量读取累计输出，便于轮询或流式消费；
    - 支持对象级关闭，关闭后释放会话并禁止继续输入/读取。
-5. 返回与异常约束：
+5. 工具标识兼容解析：
+   - ReAct/Auto 等策略在调用工具时，`action.tool` 允许使用三类标识：规范注册名（如 `macos_terminal_tool_run_command`）、函数路径（如 `tools.macos_terminal_tool.run_command`）、工具模块别名（如 `macos_terminal_tool`）；
+   - 执行器需先按规范注册名匹配，未命中再按函数路径和模块别名做兼容解析；
+   - 当别名匹配到多个函数时必须返回“别名不唯一”错误并附候选路径，禁止静默选择，避免误调用。
+6. 返回与异常约束：
    - 工具对外返回统一结构：成功 `success + data`，失败 `success + error`；
    - 组件调用失败、会话不存在、对象不存在、平台不支持等场景需返回明确可读错误；
    - 对象关闭失败需保留原始错误信息，避免静默吞错。
-6. 平台边界：
+7. 平台边界：
    - 工具层不绕过组件的平台校验；在非 macOS 环境调用时，按组件返回错误透传；
    - 工具 `README.md` 必须显式声明支持系统为 `macos`。
 
@@ -358,10 +369,10 @@
    - 在侧边栏 `工具组件` 上方新增一级菜单 `智能体（agents）`；
    - 保持与现有一级菜单一致的展开/收缩与激活高亮交互。
 2. 二级菜单新增：
-   - 在 `智能体（agents）` 下新增二级菜单项 `心法`、`号令`；
-   - `心法` 对应目录固定为 `agents/mindforge`；
+   - 在 `智能体（agents）` 下对用户开放并展示二级菜单项 `号令`；
+   - `心法` 对应目录仍为 `agents/mindforge`，但侧边栏入口隐藏，不在界面对用户开放；
    - `号令` 对应目录固定为 `agents/helm`，用于承载循环与状态机逻辑相关的 agent 组件；
-   - 菜单顺序要求：`心法` 第一项，`号令` 第二项；后续模块可按同结构扩展。
+   - 菜单顺序要求：当前仅展示 `号令`；后续新增对外模块时按同结构扩展。
 3. 智能体项检索页能力：
    - 新增独立查询管理页，按目录项展示对应模块目录（如 `agents/mindforge`、`agents/helm`）下智能体项；
    - 智能体项以“目录”为最小管理单元（每项至少包含一个目录）；
@@ -392,6 +403,8 @@
    - 查询清单统一使用 `list_*` 前缀；
    - 查询单项状态统一使用 `get_*_enabled` 前缀；
    - 更新单项状态统一使用 `set_*_enabled` 前缀；
+   - 查询“仅启用项”统一使用 `list_enabled_*` 前缀；
+   - 白名单收敛统一使用 `filter_enabled_*` 前缀；
    - 查询映射统一使用 `get_*_key_by_*` 前缀（若存在映射场景）；
    - 方法名采用小写下划线，保持与顶层 `component/manager.py` 风格一致。
 3. 数据与状态策略：
@@ -401,10 +414,12 @@
 4. Django 集成约束：
    - 工具集页面不再在 `views.py` 内散落目录扫描逻辑，统一通过 `tools.manager` 读取；
    - 视图层仅负责参数归一化、筛选条件传递和页面渲染，不负责工具目录元数据解析细节。
+   - 工具集页切换状态必须经由 `tools.manager.set_toolset_enabled`，并保留当前筛选条件回跳；
+   - 伙伴权限作用域组装时，`allowed_toolsets` 必须通过 `tools.manager.filter_enabled_toolsets` 做运行时收敛，避免停用工具残留到执行上下文。
 5. 兼容与边界：
    - 历史工具目录无需强制改名，管理器按目录扫描与约定字段兼容；
    - 缺失“支持操作系统”声明的工具按全平台可见降级；
-   - 本阶段只落地“管理与读取能力”，不改变既有工具具体业务执行链路。
+   - 停用工具仍需在管理页可见（用于重新启用），但默认不进入智能体可见范围。
 
 ### 5.19 agents 智能体管理器（manager）统一规范
 为满足“智能体目录与工具/组件保持同一治理模型”的需求，新增以下规则：
@@ -420,9 +435,89 @@
    - 智能体项列表页与导入/导出流程中的目录解析与校验，统一复用 `agents.manager`；
    - `views.py` 不再维护智能体目录扫描细节，只保留请求参数处理与页面渲染。
 4. 兼容与边界：
-   - 已有智能体模块目录结构保持不变（如 `agents/mindforge`、`agents/helm`）；
+   - 已有智能体模块目录结构保持不变（如 `agents/mindforge`、`agents/helm`、`agents/skills`）；
    - README 缺失时按可读降级返回，不影响列表加载；
    - 本阶段不改变既有智能体执行链路，仅补齐管理与查询统一入口。
+
+### 5.20 tools 编程工具（coder）实现约束
+为满足“将编程草案能力从 `agents/skills/coder` 迁移为工具集唯一入口 `tools/coder`”的需求，新增以下规则：
+1. 管理归属：
+   - `coder` 归属 `tools` 工具集，不再作为 `agents/skills` 目录下的技能项管理；
+   - 工具检索、启停与展示统一纳入 `tools/manager.py` 管理模型。
+2. coder 工具目录结构：
+   - `tools/coder` 作为单个工具目录，至少包含 `__init__.py`、主实现文件、`README.md`；
+   - 不再维护 `agents/skills/coder/manifest.yaml` 等技能元数据文件。
+3. coder 工具接口契约：
+   - 对外暴露单一入口函数，签名遵循 `def generate_programming_draft(input: str, **kwargs) -> dict`；
+   - 返回结构保持稳定，包含 `status`、`result`、`message`，并保证 JSON 可序列化；
+   - 需对 JSON 输入解析失败、参数缺失、执行异常等场景做统一错误返回，禁止未捕获异常外抛。
+4. 能力边界：
+   - coder 工具默认支持“脚手架落盘能力”，至少创建目标目录、`README.md` 与一个代码入口文件（如 `main.py` / `index.js`）；
+   - 写入路径需受限在项目根目录允许范围内，禁止目录穿越；支持通过参数切换为“仅草案模式（不落盘）”；
+   - 工具不直接执行系统命令；涉及删除、重命名、覆盖既有关键文件等高风险操作时，需返回明确提示并要求上层确认。
+5. 测试约束：
+   - 需为 `tools/coder` 补充单元测试，覆盖成功路径与典型错误路径；
+   - 需覆盖脚手架落盘行为（目录/README/代码文件创建）与路径安全拦截场景；
+   - 需验证迁移后 `agents/skills` 不再承载 `coder`，工具调用统一以 `tools/coder` 为准。
+
+### 5.21 tools 新增 Cursor CLI 编程委托工具
+为满足“在工具集层调用 Cursor CLI 进行代码开发委托”的需求，新增以下规则：
+1. 工具目录与定位：
+   - 在 `tools` 下新增独立工具目录 `tools/cursor_cli_tool`；
+   - 工具负责“Cursor CLI 会话对象编排与命令调用”，用于将代码开发任务委托给 Cursor CLI，不重复实现终端子进程管理。
+2. 调用链路约束：
+   - 工具与终端交互能力必须通过 `tools/macos_terminal_tool.MacosTerminalTool` 复用；
+   - 禁止在该工具内直接导入 `component` 并绕过 `tools/component_call_tool`。
+3. 智能体可用性边界：
+   - `tools/cursor_cli_tool` 默认纳入智能体可用工具集，可被能力检索、规划与工具执行链路直接命中；
+   - 能力检索与工具执行白名单需同时暴露 `create_cursor_cli_session` 与 `call_cursor_agent`，保证智能体可先建会话再调用 Agent；
+   - 运行时仍受伙伴工具集授权与工具集启停状态约束，未授权或停用时返回可读错误。
+4. 会话模型约束：
+   - 工具需支持创建 Cursor CLI 会话对象，并维护 `object_id`、`cwd`、`shell_mode`、`cursor_binary`；
+   - 会话对象复用底层终端对象，支持在同一 shell 上下文中连续调用 Cursor CLI；
+   - 会话关闭后禁止继续调用，需返回明确错误。
+5. 交互调用能力：
+   - 支持“拼接命令参数调用 Cursor CLI”（`cursor <args>`）并返回结构化结果；
+   - `call_cursor` 的参数契约以 `args` 为主，同时兼容历史调用入参 `command`（等价映射到 `args`），避免编排链路因参数名差异触发 `TypeError`；
+   - 支持“基于 prompt 的调用快捷方法”，自动进行 shell 安全转义；
+   - 支持可选执行前可用性检测（`command -v <cursor_binary>`）；
+   - 参考 `deleted/cursor-local` 的流式协议，支持对 `stream-json/jsonl` 输出做结构化解析（至少提取 `session_id`、`summary`、`usage`、`cost`、`error`）；
+   - 支持在工具会话内传入 `session_id` 进行 `--resume` 续跑，并将本次解析出的 `session_id` 回写到会话状态，便于多轮连续委托。
+6. 返回与异常约束：
+   - 对外返回统一结构：成功 `success + data`，失败 `success + error`；
+   - `call_cursor_agent` 在编排场景下允许会话自愈：当 `object_id` 为空或不存在时，工具可自动创建新会话继续执行，并在返回中补充 `actual_object_id` 与 `auto_created_session`；
+   - 除 `call_cursor_agent` 外，`call_cursor/call_cursor_with_prompt/check_cursor_available/get_cursor_session_id/close_cursor_cli_session` 仍保持严格校验，`object_id` 不存在时必须返回可读错误；
+   - 参数为空、CLI 不可用、命令失败等场景必须返回可读错误；
+   - 工具层不吞掉底层终端调用错误，需原样透传核心错误信息。
+7. 平台边界：
+   - 当前版本依赖 `MacosTerminalTool`，支持系统声明为 `macos`；
+   - 跨平台适配作为后续增强项，不在本次范围内扩展。
+
+### 5.22 Django 系统设置新增“权限限制”总开关（调试模式）
+为满足“调试阶段可一键关闭伙伴权限限制”的需求，新增以下规则：
+1. 设置入口：
+   - 在 `设置 -> 个人设置` 页面增加“权限限制”配置区块；
+   - 提供单一开关：`开启权限限制` / `关闭权限限制`。
+2. 默认策略：
+   - 默认值为“开启权限限制”（即保持当前线上安全策略）；
+   - 仅在显式关闭后进入调试放开模式。
+3. 存储策略（ORM）：
+   - 新增 `SystemRuntimeSetting` 模型（键值型配置）；
+   - 本开关使用固定 key（如 `permission_restriction_enabled`）持久化；
+   - 值以字符串布尔语义存储（`"true"/"false"`），读取端统一归一化。
+4. 运行时行为：
+   - 开关为“开启”时：保持现有伙伴白名单限制（agent/control/toolset/component/function）；
+   - 开关为“关闭”时：对所有伙伴统一放开限制：
+     - agent 模块放开（至少包含 `mindforge`、`helm` 及当前注册模块）；
+     - component 模块放开（至少包含 `communicate/observe/decide/handle`）；
+     - component/toolset/component_key/function_path 不再做白名单收缩；
+     - 伙伴编排上下文与系统提示词需同步反映“调试模式下已关闭权限限制”，避免模型误判受限。
+5. 影响边界：
+   - 仅放开“伙伴权限白名单”约束，不改变组件本身的安全校验（如组件启停、系统权限确认、依赖检查等）；
+   - 不修改伙伴配置数据本身，开关恢复后立即按原白名单生效。
+6. 兼容与降级：
+   - 若 `SystemRuntimeSetting` 表不存在（未迁移）或读取异常，按安全默认值“开启权限限制”处理；
+   - 页面保存失败需返回可读错误，不返回 500。
 
 ## 6. 组件注册与兼容映射
 ### 6.1 注册索引文件
@@ -511,11 +606,28 @@
 33. 验证工具集页通过 `tools.manager` 返回列表与统计，视图层不再直接扫描 `tools` 目录。
 34. 验证 `tools/toolset_state.json` 在首次写入时自动创建，且状态读写可追踪。
 35. 验证工具 README 缺失或 OS 声明缺失时可按降级规则展示，不影响页面可用性。
+36. 验证工具集列表页每项均展示状态与“启用/停用”按钮，点击后状态持久化并保留筛选参数回跳。
+37. 验证停用工具在管理页仍可见，但在伙伴运行时 `allowed_toolsets` 中被自动剔除。
+38. 验证停用工具不会出现在能力检索结果与智能体候选工具集可见范围中。
 36. 验证 `agents/manager.py` 可提供智能体模块与智能体项管理 API（list/get/set/get_key）。
 37. 验证智能体项列表页通过 `agents.manager` 返回列表结果，视图层不再直接扫描 `agents` 目录。
 38. 验证 `agents/agent_state.json` 在首次写入时自动创建，且模块启停状态可读写。
 39. 验证 `ComponentCallTool.control_call` 在组件存在 `system_permission_schema.required=true` 且权限未确认时拒绝执行（包括 orchestration/mindforge/tool 链路）。
 40. 验证权限存储不可用（如迁移未执行或 ORM 不可用）时，按降级策略不阻断调用并返回可读原因。
+41. 验证迁移后 `agents/skills` 下不再存在 `coder` 目录，避免技能与工具双轨并存。
+42. 验证 `tools/coder` 工具入口函数满足标准输入输出契约并覆盖成功/错误路径测试。
+43. 验证 `tools/cursor_cli_tool` 可创建会话并在同一对象上执行 Cursor CLI 调用命令。
+44. 验证 `tools/cursor_cli_tool` 在 `call_cursor_agent` 场景下，当 `object_id` 为空或无效时可自动创建会话并继续执行，返回 `actual_object_id/auto_created_session`。
+45. 验证 `tools/cursor_cli_tool` 的 prompt 快捷调用会对输入做 shell 安全转义并正确透传执行结果。
+46. 验证 `tools/cursor_cli_tool` 的严格接口（`call_cursor/call_cursor_with_prompt/check_cursor_available/get_cursor_session_id/close_cursor_cli_session`）在 `object_id` 无效时返回可读错误。
+47. 验证 `tools/cursor_cli_tool` 默认可被能力检索收录，并可在工具执行器白名单内直接调起（受工具集授权与启停状态约束），且包含 `create_cursor_cli_session`。
+48. 验证 `tools/cursor_cli_tool` 对 `stream-json/jsonl` 输出可解析 `session_id/summary/usage/cost/error`，并在会话续跑时正确透传与更新 `session_id`。
+49. 验证工具执行器在 `action.tool=macos_terminal_tool`（模块别名）且目标唯一时，可正确路由到 `tools.macos_terminal_tool.run_command` 执行。
+50. 验证工具执行器在别名匹配到多个函数时返回“别名不唯一”错误并附候选路径。
+46. 验证系统设置页可切换“权限限制”开关并持久化到 `SystemRuntimeSetting`。
+48. 验证开关关闭后，伙伴编排上下文不再使用伙伴白名单（对所有伙伴生效）。
+49. 验证开关重新开启后恢复伙伴白名单限制，无需修改伙伴配置。
+50. 验证在迁移未执行（设置表缺失）时，系统按默认“开启权限限制”安全降级。
 
 ## 12. control/agents ReAct 引擎设计
 ### 12.1 目标与边界
@@ -588,24 +700,31 @@
 6. 单元测试目录按镜像规则落位：`control/agents/react_engine.py` 对应 `test/test_control/test_agents/test_react_engine.py`，目录名采用 `test_` + 被测目录名，测试文件采用 `test_*.py` 命名。
 7. 为兼容 `python -m unittest test.test_xxx...` 模块路径执行方式，`test` 及其镜像子目录需包含 `__init__.py`，避免与 Python 标准库 `test` 包解析冲突。
 
-### 12.9 mindforge ReAct 引擎结构化解耦
-为降低单文件复杂度并提升可维护性，`agents/mindforge` 下 ReAct 引擎按“目录化 + 模块职责分离”改造：
+### 12.9 mindforge 策略目录化解耦
+为降低单文件复杂度并提升可维护性，`agents/mindforge` 下策略按“每策略一个目录 + 模块职责分离”改造：
 1. 目录结构：
-   - `agents/mindforge/react_engine/` 作为独立引擎目录；
-   - 目录内至少包含：`__init__.py`、`engine.py`、`models.py`、`protocol.py`、`executor.py`、`README.md`。
+   - `agents/mindforge/auto_strategy/` 作为 Auto 自动路由策略目录；
+   - `agents/mindforge/react_strategy/` 作为 ReAct 策略目录；
+   - `agents/mindforge/cot_strategy/` 作为 CoT 策略目录；
+   - `agents/mindforge/plan_execute_strategy/` 作为 Plan-and-Execute（规划-执行）策略目录；
+   - `agents/mindforge/reflexion_strategy/` 作为 Reflexion（反思重试）策略目录；
+   - 每个策略目录至少包含：`__init__.py`、`api.py`、`README.md`；
+   - ReAct 策略目录额外包含：`engine.py`、`models.py`、`protocol.py`、`executor.py`。
 2. 职责拆分：
    - `models.py`：数据结构定义（`ReActTool`、`ReActEngineConfig`、`ReActStepRecord`、`ReActRunResult`）；
    - `protocol.py`：模型输出 JSON 协议解析与文本提取；
    - `executor.py`：工具执行与白名单校验；
    - `engine.py`：主循环编排、LangGraph 可选执行、消息构造；
-   - `__init__.py`：统一导出公共 API。
+   - `api.py`：策略入口（供执行器调用）；
+   - `__init__.py`：统一导出公共 API；
+   - `README.md`：供管理页检索摘要与导入导出时识别能力描述。
 3. 兼容约束：
-   - 继续支持 `from agents.mindforge.react_engine import ReActEngine` 的导入方式；
+   - 继续支持 `from agents.mindforge import ReActEngine` 的导入方式；
    - 不改变已有 ReAct 输入输出协议与返回结构；
    - 工具调用与模型调用链路保持不变，仍通过 `ComponentCallTool`。
 4. 文档约束：
-   - `agents/mindforge/react_engine/README.md` 明确目录职责、输入输出协议与快速使用示例；
-   - `agents/mindforge/README.md` 保留模块级说明，并指向 `react_engine` 子目录。
+   - `agents/mindforge/auto_strategy/README.md`、`agents/mindforge/react_strategy/README.md`、`agents/mindforge/cot_strategy/README.md`、`agents/mindforge/plan_execute_strategy/README.md` 与 `agents/mindforge/reflexion_strategy/README.md` 需明确目录职责、输入输出约束与快速使用说明；
+   - `agents/mindforge/AGENTS.md` 保留模块级说明，并指向各策略子目录。
 
 ### 12.10 helm 号令：原始需求收集流程机制抽取
 为满足“将聊天中的原始需求收集流程与状态机制沉淀为可复用号令组件”的需求，新增以下规则：
@@ -625,3 +744,18 @@
 5. 文档约束：
    - `agents/helm/requirement_session_command/README.md` 需描述流程状态机、关键词策略、调用示例；
    - 说明该号令可被其他模块复用（如后续多入口需求采集流程）。
+
+### 12.11 tools 动态调用参数收敛机制
+为避免智能体工具调用时因模型附带冗余参数触发 `TypeError: got an unexpected keyword argument`，新增以下规则：
+1. 统一收敛入口：
+   - `tools/mindforge_toolset/mindforge_toolset.py` 的 `call_tool_function(function_path, kwargs)` 在反射调用工具方法前，必须执行入参收敛；
+   - 收敛逻辑与 `tools/component_call_tool.ComponentCallTool` 保持一致语义：按函数签名筛选，仅保留目标函数显式声明参数（或函数支持 `**kwargs` 时透传全部参数）。
+2. 冗余参数处理策略：
+   - 对未在签名中声明的参数执行丢弃，不得直接透传到 `method(**kwargs)`；
+   - 调用链路需支持记录被丢弃参数键名（用于日志诊断），但不得因此中断主流程。
+3. 行为边界：
+   - 参数收敛仅处理“多余参数”，不补齐必填参数；目标函数仍按自身签名校验必填项；
+   - 该机制不改变工具授权、启停、路径校验等既有安全约束。
+4. 回归保障：
+   - 必须增加单测覆盖“kwargs 包含目标函数未声明字段（如 `language`）”场景；
+   - 断言工具调用不再因冗余字段报 `unexpected keyword argument`，并且有效参数仍可正确透传执行。

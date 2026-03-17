@@ -282,9 +282,15 @@ class Project(models.Model):
         return self.name
 
     def save(self, *args, **kwargs):
-        # 确保路径是绝对路径
+        # 统一按系统根目录（core 的上一级）解析相对路径，避免受当前 cwd 影响。
         if self.path:
-            self.path = os.path.abspath(self.path)
+            raw_path = str(self.path).strip()
+            if raw_path:
+                project_root = Path(getattr(settings, "PROJECT_ROOT", Path(__file__).resolve().parents[2]))
+                normalized_path = Path(raw_path)
+                if not normalized_path.is_absolute():
+                    normalized_path = project_root / normalized_path
+                self.path = str(normalized_path.resolve())
         # 如果设置为默认项目，取消其他项目的默认状态
         if self.is_default:
             Project.objects.filter(created_by=self.created_by, is_default=True).update(is_default=False)
@@ -355,20 +361,20 @@ class Project(models.Model):
 
     @classmethod
     def get_core_project_path(cls):
-        """获取 core 项目的路径"""
-        return os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        """获取系统根目录路径（core 的上一级目录）。"""
+        return str(getattr(settings, "PROJECT_ROOT", Path(__file__).resolve().parents[2]))
 
     @classmethod
     def get_projects_base_path(cls):
-        """获取项目基础路径（core 的父目录）"""
-        return os.path.dirname(cls.get_core_project_path())
+        """获取项目基础路径（默认与系统根目录一致）。"""
+        return cls.get_core_project_path()
 
     @classmethod
     def get_default_project(cls, user):
         """获取用户的默认项目，如果没有则创建core项目"""
         project = cls.objects.filter(created_by=user, is_default=True).first()
         if not project:
-            # 创建默认的core项目，路径指向 core 目录（项目根目录）
+            # 创建默认的 core 项目，路径指向系统根目录（core 的上一级目录）。
             core_project_path = cls.get_core_project_path()
             project, _ = cls.objects.get_or_create(
                 created_by=user,
@@ -866,6 +872,74 @@ class ComponentSystemPermissionGrant(models.Model):
 
     def __str__(self):
         return f"{self.component_key} - {self.permission_key}"
+
+
+class SystemRuntimeSetting(models.Model):
+    """系统运行时设置（键值型）。"""
+
+    key = models.CharField(max_length=120, unique=True, verbose_name="设置键")
+    value_text = models.TextField(blank=True, default="", verbose_name="设置值")
+    description = models.TextField(blank=True, verbose_name="说明")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    class Meta:
+        verbose_name = "系统运行时设置"
+        verbose_name_plural = "系统运行时设置"
+        ordering = ["key"]
+
+    def __str__(self):
+        return self.key
+
+    @classmethod
+    def get_bool(cls, key: str, default: bool = True) -> bool:
+        key_text = str(key or "").strip()
+        if not key_text:
+            return bool(default)
+        raw_value = cls.objects.filter(key=key_text).values_list("value_text", flat=True).first()
+        if raw_value is None:
+            return bool(default)
+        normalized = str(raw_value or "").strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        return bool(default)
+
+    @classmethod
+    def set_bool(cls, key: str, enabled: bool, description: str = ""):
+        key_text = str(key or "").strip()
+        if not key_text:
+            return
+        defaults = {"value_text": "true" if bool(enabled) else "false"}
+        description_text = str(description or "").strip()
+        if description_text:
+            defaults["description"] = description_text
+        cls.objects.update_or_create(key=key_text, defaults=defaults)
+
+    @classmethod
+    def get_float(cls, key: str, default: float = 0.0) -> float:
+        key_text = str(key or "").strip()
+        if not key_text:
+            return float(default)
+        raw_value = cls.objects.filter(key=key_text).values_list("value_text", flat=True).first()
+        if raw_value is None:
+            return float(default)
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @classmethod
+    def set_float(cls, key: str, value: float, description: str = ""):
+        key_text = str(key or "").strip()
+        if not key_text:
+            return
+        defaults = {"value_text": str(float(value))}
+        description_text = str(description or "").strip()
+        if description_text:
+            defaults["description"] = description_text
+        cls.objects.update_or_create(key=key_text, defaults=defaults)
 
 
 class ControlApiTestTask(models.Model):

@@ -1,11 +1,22 @@
 {
   "directory": "component/handle",
-  "description": "执行与处理模块，提供文件读取、检索、元信息查询、鼠标操作、Python 依赖包管理与 macOS 终端会话能力。",
+  "description": "执行与处理模块，提供文件读取、写入、检索、元信息查询、鼠标操作、Python 依赖包管理与 macOS 终端会话能力。",
   "components": [
     {
       "component_key": "handle.file_reader_component",
       "component_dir": "component/handle/file_reader_component",
       "description": "文件读取组件，负责文件内容读取、行区间读取、关键字/正则检索和文件统计。",
+      "default_enabled": true,
+      "supported_systems": ["macos", "linux", "windows"],
+      "system_param_schema": {
+        "enabled": false,
+        "fields": []
+      }
+    },
+    {
+      "component_key": "handle.file_writer_component",
+      "component_dir": "component/handle/file_writer_component",
+      "description": "文件写组件，负责文件创建、覆盖写入、追加写入与文本替换。",
       "default_enabled": true,
       "supported_systems": ["macos", "linux", "windows"],
       "system_param_schema": {
@@ -313,6 +324,220 @@
       "demo_param_schema": {
         "enabled": true,
         "fields": []
+      }
+    },
+    {
+      "path": "component.handle.create_file",
+      "component_key": "handle.file_writer_component",
+      "description": "创建文件，支持按需自动创建父目录与覆盖模式。",
+      "input": {
+        "file_path": "str，目标文件路径",
+        "content": "str，可选，初始内容，默认空字符串",
+        "encoding": "str，可选，默认 utf-8",
+        "create_parent_dirs": "bool，可选，默认 true，不存在父目录时是否自动创建",
+        "overwrite": "bool，可选，默认 false，目标文件已存在时是否覆盖"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "file_path",
+            "required": true,
+            "sensitive": false,
+            "description": "目标文件路径",
+            "value_type": "string",
+            "default": "data/temp/demo_writer_component/sample.txt"
+          },
+          {
+            "name": "content",
+            "required": false,
+            "sensitive": false,
+            "description": "初始文件内容",
+            "value_type": "string",
+            "default": "hello\\n"
+          },
+          {
+            "name": "encoding",
+            "required": false,
+            "sensitive": false,
+            "description": "文件编码",
+            "value_type": "string",
+            "default": "utf-8"
+          },
+          {
+            "name": "create_parent_dirs",
+            "required": false,
+            "sensitive": false,
+            "description": "是否自动创建父目录",
+            "value_type": "bool",
+            "default": true
+          },
+          {
+            "name": "overwrite",
+            "required": false,
+            "sensitive": false,
+            "description": "目标文件存在时是否覆盖",
+            "value_type": "bool",
+            "default": false
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.write_file",
+      "component_key": "handle.file_writer_component",
+      "description": "覆盖写入文件内容，默认要求父目录已存在。",
+      "input": {
+        "file_path": "str，目标文件路径",
+        "content": "str，覆盖后的内容",
+        "encoding": "str，可选，默认 utf-8",
+        "create_parent_dirs": "bool，可选，默认 false，不存在父目录时是否自动创建"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "file_path",
+            "required": true,
+            "sensitive": false,
+            "description": "目标文件路径",
+            "value_type": "string",
+            "default": "data/temp/demo_writer_component/sample.txt"
+          },
+          {
+            "name": "content",
+            "required": true,
+            "sensitive": false,
+            "description": "覆盖后的内容",
+            "value_type": "string",
+            "default": "reset content\\n"
+          },
+          {
+            "name": "encoding",
+            "required": false,
+            "sensitive": false,
+            "description": "文件编码",
+            "value_type": "string",
+            "default": "utf-8"
+          },
+          {
+            "name": "create_parent_dirs",
+            "required": false,
+            "sensitive": false,
+            "description": "是否自动创建父目录",
+            "value_type": "bool",
+            "default": false
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.append_file",
+      "component_key": "handle.file_writer_component",
+      "description": "向文件末尾追加内容，不存在时可自动创建父目录及文件。",
+      "input": {
+        "file_path": "str，目标文件路径",
+        "content": "str，追加内容",
+        "encoding": "str，可选，默认 utf-8",
+        "create_parent_dirs": "bool，可选，默认 true，不存在父目录时是否自动创建"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "file_path",
+            "required": true,
+            "sensitive": false,
+            "description": "目标文件路径",
+            "value_type": "string",
+            "default": "data/temp/demo_writer_component/sample.txt"
+          },
+          {
+            "name": "content",
+            "required": true,
+            "sensitive": false,
+            "description": "追加内容",
+            "value_type": "string",
+            "default": "append line\\n"
+          },
+          {
+            "name": "encoding",
+            "required": false,
+            "sensitive": false,
+            "description": "文件编码",
+            "value_type": "string",
+            "default": "utf-8"
+          },
+          {
+            "name": "create_parent_dirs",
+            "required": false,
+            "sensitive": false,
+            "description": "是否自动创建父目录",
+            "value_type": "bool",
+            "default": true
+          }
+        ]
+      }
+    },
+    {
+      "path": "component.handle.replace_file_text",
+      "component_key": "handle.file_writer_component",
+      "description": "替换文件中的文本片段，支持替换全部或指定次数。",
+      "input": {
+        "file_path": "str，目标文件路径",
+        "old_text": "str，待替换文本",
+        "new_text": "str，替换后文本",
+        "encoding": "str，可选，默认 utf-8",
+        "count": "int，可选，默认 -1，-1 表示全部替换，正整数表示最多替换次数"
+      },
+      "output": "dict，统一返回 success/data 或 success/error",
+      "demo_param_schema": {
+        "enabled": true,
+        "fields": [
+          {
+            "name": "file_path",
+            "required": true,
+            "sensitive": false,
+            "description": "目标文件路径",
+            "value_type": "string",
+            "default": "data/temp/demo_writer_component/sample.txt"
+          },
+          {
+            "name": "old_text",
+            "required": true,
+            "sensitive": false,
+            "description": "待替换文本",
+            "value_type": "string",
+            "default": "line"
+          },
+          {
+            "name": "new_text",
+            "required": true,
+            "sensitive": false,
+            "description": "替换后文本",
+            "value_type": "string",
+            "default": "content"
+          },
+          {
+            "name": "encoding",
+            "required": false,
+            "sensitive": false,
+            "description": "文件编码",
+            "value_type": "string",
+            "default": "utf-8"
+          },
+          {
+            "name": "count",
+            "required": false,
+            "sensitive": false,
+            "description": "替换次数，-1 表示全部替换",
+            "value_type": "int",
+            "default": -1
+          }
+        ]
       }
     },
     {

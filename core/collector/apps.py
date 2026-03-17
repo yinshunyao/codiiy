@@ -23,9 +23,16 @@ class CollectorConfig(AppConfig):
         if command in {"runserver", "runserver_plus"} and os.environ.get("RUN_MAIN") not in {"true", "1"}:
             return
 
-        from .orchestration.capability_search import preload_capability_index
+        from .orchestration.capability_search import preload_capability_index, refresh_capability_index
 
-        preload_capability_index()
+        try:
+            refresh_capability_index()
+        except Exception:
+            # 刷新失败时退化为预加载，避免启动阶段因索引刷新异常阻断服务。
+            preload_capability_index()
+        from .views import recover_interrupted_chat_reply_tasks_once
+
+        recover_interrupted_chat_reply_tasks_once()
         if command in {"runserver", "runserver_plus"}:
             from .local_llm_server import bootstrap_local_ollama_for_enabled_configs
 

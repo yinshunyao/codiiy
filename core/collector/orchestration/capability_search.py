@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from agents.manager import AGENT_MODULE_LABELS, list_agent_items
-from tools.component_call_tool import ComponentCallTool
 from tools.manager import list_toolsets
 
 from ..models import Project
@@ -23,6 +22,26 @@ _CACHE_RELATIVE_PATH = Path("data") / "database" / "capability_callable_index.js
 _ZVEC_COLLECTION_RELATIVE_PATH = Path("data") / "database" / "capability_callable_zvec"
 _ZVEC_META_RELATIVE_PATH = Path("data") / "database" / "capability_callable_zvec_meta.json"
 _DENSE_VECTOR_DIMENSION = 256
+_TOOL_FUNCTION_CATALOG = [
+    {"path": "tools.file_path_tool.create_directory", "description": "创建目录"},
+    {"path": "tools.file_path_tool.create_file", "description": "创建文件"},
+    {"path": "tools.file_path_tool.rename_path", "description": "重命名文件或目录"},
+    {"path": "tools.file_path_tool.move_path", "description": "移动文件或目录"},
+    {"path": "tools.file_operator_tool.read_file", "description": "读取文件内容"},
+    {"path": "tools.file_operator_tool.read_lines", "description": "按行读取文件"},
+    {"path": "tools.file_operator_tool.search_keyword", "description": "按关键字搜索文件"},
+    {"path": "tools.file_operator_tool.search_regex", "description": "按正则搜索文件"},
+    {"path": "tools.file_operator_tool.get_file_stats", "description": "获取文件信息"},
+    {"path": "tools.file_operator_tool.create_file", "description": "创建文件并写入内容"},
+    {"path": "tools.file_operator_tool.write_file", "description": "覆盖写入文件"},
+    {"path": "tools.file_operator_tool.append_file", "description": "追加写入文件"},
+    {"path": "tools.file_operator_tool.replace_file_text", "description": "替换文件文本"},
+    {"path": "tools.create_tool.create_tool", "description": "创建工具脚手架"},
+    {"path": "tools.cursor_cli_tool.create_cursor_cli_session", "description": "创建 Cursor CLI 会话"},
+    {"path": "tools.cursor_cli_tool.call_cursor_agent", "description": "调用 Cursor Agent 执行编程任务"},
+    {"path": "tools.cursor_cli_tool.call_cursor_with_prompt", "description": "按 prompt 调用 Cursor CLI"},
+    {"path": "tools.cursor_cli_tool.call_cursor", "description": "按参数调用 Cursor CLI 命令"},
+]
 
 
 def _normalize_search_mode(search_mode: str) -> str:
@@ -86,9 +105,17 @@ def _build_dense_vector_from_term_freq(term_freq: Dict[str, float], dim: int = _
     return [value / norm for value in vector]
 
 
+def _should_track_signature_path(path: Path) -> bool:
+    name = path.name.lower()
+    if name.startswith("."):
+        return False
+    if name == "__pycache__":
+        return False
+    return True
+
+
 class CapabilitySearchEngine:
     def __init__(self):
-        self.component_tool = ComponentCallTool(auto_install=False)
         self.repo_root = Path(Project.get_projects_base_path())
         self.cache_path = self.repo_root / _CACHE_RELATIVE_PATH
         self.zvec_collection_path = self.repo_root / _ZVEC_COLLECTION_RELATIVE_PATH
@@ -144,6 +171,7 @@ class CapabilitySearchEngine:
                 query_weight=query_weight,
                 query_norm=query_norm,
                 kind_filter=kind_filter,
+                allowed_toolsets=allowed_toolsets,
                 allowed_agent_modules=allowed_agent_modules,
                 allowed_control_modules=allowed_control_modules,
                 top_k=top_k,
@@ -163,7 +191,7 @@ class CapabilitySearchEngine:
             if item.get("kind") == "toolset" and allowed_toolsets:
                 if item.get("module") not in allowed_toolsets:
                     continue
-            if item.get("kind") == "component_function" and allowed_control_modules:
+            if item.get("kind") == "tool_function" and allowed_control_modules:
                 if item.get("module") not in allowed_control_modules:
                     continue
             scoring = self._score_item(
@@ -242,6 +270,7 @@ class CapabilitySearchEngine:
         query_weight: Dict[str, float],
         query_norm: float,
         kind_filter: Optional[Set[str]],
+        allowed_toolsets: Optional[Set[str]],
         allowed_agent_modules: Optional[Set[str]],
         allowed_control_modules: Optional[Set[str]],
         top_k: int,
@@ -295,7 +324,7 @@ class CapabilitySearchEngine:
                 if item.get("kind") == "toolset" and allowed_toolsets:
                     if item.get("module") not in allowed_toolsets:
                         continue
-                if item.get("kind") == "component_function" and allowed_control_modules:
+                if item.get("kind") == "tool_function" and allowed_control_modules:
                     if item.get("module") not in allowed_control_modules:
                         continue
                 base_scoring = self._score_item(
@@ -419,6 +448,13 @@ class CapabilitySearchEngine:
             idf_map = payload.get("idf_map")
             if not isinstance(entries, list) or not isinstance(idf_map, dict):
                 return None
+            allowed_kinds = {"agent_item", "toolset", "tool_function"}
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                kind = str(item.get("kind") or "").strip()
+                if kind not in allowed_kinds:
+                    return None
             return payload
         except Exception:
             return None
@@ -434,7 +470,7 @@ class CapabilitySearchEngine:
         entries: List[Dict[str, Any]] = []
         entries.extend(self._build_agent_entries())
         entries.extend(self._build_tool_entries())
-        entries.extend(self._build_component_entries())
+        entries.extend(self._build_tool_function_entries())
 
         doc_count = max(1, len(entries))
         df_map: Dict[str, int] = {}
@@ -602,7 +638,6 @@ class CapabilitySearchEngine:
         roots = [
             self.repo_root / "agents",
             self.repo_root / "tools",
-            self.repo_root / "component",
         ]
         parts: List[str] = []
         allow_suffixes = {".py", ".md", ".json"}
@@ -610,16 +645,22 @@ class CapabilitySearchEngine:
             if not root.exists() or not root.is_dir():
                 continue
             for path in sorted(root.rglob("*")):
+                if not _should_track_signature_path(path):
+                    continue
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                rel = path.relative_to(self.repo_root).as_posix()
+                if path.is_dir():
+                    # 目录签名用于感知新增/删除组件或工具目录，保证搜索缓存实时刷新。
+                    parts.append(f"dir:{rel}:{int(stat.st_mtime_ns)}")
+                    continue
                 if not path.is_file():
                     continue
                 if path.suffix.lower() not in allow_suffixes:
                     continue
-                rel = path.relative_to(self.repo_root).as_posix()
-                try:
-                    stat = path.stat()
-                    parts.append(f"{rel}:{int(stat.st_mtime_ns)}:{int(stat.st_size)}")
-                except OSError:
-                    continue
+                parts.append(f"file:{rel}:{int(stat.st_mtime_ns)}:{int(stat.st_size)}")
         signature_text = "|".join(parts)
         return hashlib.sha256(signature_text.encode("utf-8")).hexdigest()
 
@@ -669,35 +710,27 @@ class CapabilitySearchEngine:
             )
         return entries
 
-    def _build_component_entries(self) -> List[Dict[str, Any]]:
-        result = self.component_tool.control_info()
-        if not isinstance(result, dict) or not bool(result.get("success")):
-            return []
-        payload = result.get("data") if isinstance(result, dict) else {}
-        functions = payload.get("functions") if isinstance(payload, dict) else []
-        if not isinstance(functions, list):
+    @staticmethod
+    def _build_tool_function_entries() -> List[Dict[str, Any]]:
+        existing_toolsets = {str(item.get("name") or "").strip() for item in list_toolsets(keyword="", selected_os="all")}
+        if not existing_toolsets:
             return []
         entries: List[Dict[str, Any]] = []
-        for item in functions:
-            if not isinstance(item, dict):
-                continue
+        for item in _TOOL_FUNCTION_CATALOG:
             function_path = str(item.get("path") or "").strip()
-            if not function_path.startswith("component."):
+            if not function_path.startswith("tools."):
                 continue
-            parts = function_path.split(".")
-            module_name = parts[1] if len(parts) >= 2 else ""
+            parts = [part.strip() for part in function_path.split(".") if part.strip()]
+            if len(parts) < 3:
+                continue
+            module_name = parts[1]
+            if module_name not in existing_toolsets:
+                continue
             description = str(item.get("description") or "").strip()
-            component_key = str(item.get("component_key") or "").strip()
-            input_fields = ""
-            if isinstance(item.get("input"), dict):
-                input_fields = " ".join(str(key) for key in item.get("input", {}).keys())
-            output_desc = str(item.get("output") or "").strip()
-            search_text = " | ".join(
-                [function_path, module_name, component_key, description, input_fields, output_desc]
-            )
+            search_text = " | ".join([function_path, module_name, description])
             entries.append(
-                self._build_entry(
-                    kind="component_function",
+                CapabilitySearchEngine._build_entry(
+                    kind="tool_function",
                     name=function_path.split(".")[-1],
                     path=function_path,
                     module=module_name,
@@ -746,10 +779,23 @@ def search_component_functions(
     search_engine: str = _DEFAULT_SEARCH_ENGINE,
     top_k: int = 5,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    allowed_modules = {
-        str(item or "").strip() for item in (allowed_control_modules or []) if str(item or "").strip()
+    return [], {
+        "engine_requested": _normalize_search_engine(search_engine),
+        "engine_used": "native",
+        "fallback_used": False,
+        "error": "component_function 检索已禁用，请改用 tool_function。",
     }
-    if not allowed_modules:
+
+
+def search_tool_functions(
+    query: str,
+    allowed_toolsets: List[str],
+    search_mode: str = _DEFAULT_SEARCH_MODE,
+    search_engine: str = _DEFAULT_SEARCH_ENGINE,
+    top_k: int = 8,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    allowed_toolset_set = {str(item or "").strip() for item in (allowed_toolsets or []) if str(item or "").strip()}
+    if not allowed_toolset_set:
         return [], {
             "engine_requested": _normalize_search_engine(search_engine),
             "engine_used": "native",
@@ -760,8 +806,8 @@ def search_component_functions(
         query=query,
         search_mode=search_mode,
         search_engine=search_engine,
-        kind_filter={"component_function"},
-        allowed_control_modules=allowed_modules,
+        kind_filter={"tool_function"},
+        allowed_toolsets=allowed_toolset_set,
         top_k=top_k,
     )
 
@@ -784,7 +830,7 @@ def search_capabilities(
         query=query,
         search_mode=search_mode,
         search_engine=search_engine,
-        kind_filter={"agent_item", "toolset", "component_function"},
+        kind_filter={"agent_item", "toolset", "tool_function"},
         allowed_toolsets=allowed_toolset_set,
         allowed_agent_modules=allowed_agents,
         allowed_control_modules=allowed_controls,

@@ -13,20 +13,6 @@
         gap: 10px;
         margin-bottom: 12px;
     }
-    .agent-search-form {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex: 1 1 auto;
-        min-width: 0;
-        margin: 0;
-    }
-    .agent-search-input {
-        width: 50%;
-        min-width: 260px;
-        height: 36px;
-        box-sizing: border-box;
-    }
     .agent-toolbar-btn {
         height: 36px;
         padding: 0 14px;
@@ -66,24 +52,8 @@
 
         <section class="panel">
             <div class="agent-toolbar">
-                <form method="get" action="{% url 'agent_item_list' agent_active_module %}" class="agent-search-form">
-                    <input type="text" name="q" value="{{ agent_keyword }}" placeholder="按智能体项名 / 路径 / 摘要筛选" class="agent-search-input">
-                    <select name="search_engine" class="agent-toolbar-btn">
-                        {% for option in search_engine_options %}
-                        <option value="{{ option.value }}" {% if option.value == search_engine %}selected{% endif %}>{{ option.label }}</option>
-                        {% endfor %}
-                    </select>
-                    <select name="search_mode" class="agent-toolbar-btn">
-                        {% for option in search_mode_options %}
-                        <option value="{{ option.value }}" {% if option.value == search_mode %}selected{% endif %}>{{ option.label }}</option>
-                        {% endfor %}
-                    </select>
-                    <button type="submit" class="agent-toolbar-btn">搜索</button>
-                    <button type="button" id="upload-agent-trigger-btn" class="agent-toolbar-btn">导入智能体项</button>
-                    {% if agent_keyword %}
-                    <a class="chip" href="{% url 'agent_item_list' agent_active_module %}?search_engine={{ search_engine }}&search_mode={{ search_mode }}">清空</a>
-                    {% endif %}
-                </form>
+                <a class="chip" href="{% url 'capability_search' %}">进入综合搜索</a>
+                <button type="button" id="upload-agent-trigger-btn" class="agent-toolbar-btn">导入智能体项</button>
             </div>
             <div class="meta">信息来源：`agents/{{ agent_active_module }}` 目录。</div>
             {% if agent_keyword %}

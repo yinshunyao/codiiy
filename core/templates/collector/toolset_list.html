@@ -13,54 +13,17 @@
         gap: 10px;
         margin-bottom: 12px;
     }
-    .toolset-search-form {
+    .toolset-filter-form {
         display: flex;
         align-items: center;
         gap: 8px;
-        flex: 1 1 auto;
-        min-width: 0;
         margin: 0;
-    }
-    .toolset-search-input {
-        width: 50%;
-        min-width: 260px;
-        height: 36px;
-        box-sizing: border-box;
     }
     .toolset-item {
         margin-bottom: 12px;
     }
     .toolset-os-select {
         height: 36px;
-    }
-    .knowledge-card {
-        margin-top: 12px;
-    }
-    .knowledge-result-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(160px, 1fr));
-        gap: 10px;
-        margin-top: 10px;
-    }
-    .knowledge-kpi {
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 10px;
-        background: var(--panel-2);
-    }
-    .knowledge-kpi .meta {
-        margin-top: 4px;
-    }
-    .knowledge-report-preview {
-        margin-top: 10px;
-        white-space: pre-wrap;
-        word-break: break-word;
-        max-height: 320px;
-        overflow: auto;
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 12px;
-        background: var(--panel-2);
     }
     {% include "collector/partials/sidebar_menu_styles.css" %}
 </style>
@@ -87,80 +50,24 @@
 
         <section class="panel">
             <div class="toolset-toolbar">
-                <form method="get" action="{% url 'toolset_list' %}" class="toolset-search-form">
-                    <input type="text" name="q" value="{{ toolset_keyword }}" placeholder="按工具集目录名筛选" class="toolset-search-input">
+                <a class="chip" href="{% url 'capability_search' %}">进入综合搜索</a>
+                <form method="get" action="{% url 'toolset_list' %}" class="toolset-filter-form">
                     <select name="os" class="toolset-os-select">
                         {% for option in os_options %}
                         <option value="{{ option.value }}" {% if option.value == toolset_os %}selected{% endif %}>{{ option.label }}</option>
                         {% endfor %}
                     </select>
-                    <select name="search_engine" class="toolset-os-select">
-                        {% for option in search_engine_options %}
-                        <option value="{{ option.value }}" {% if option.value == search_engine %}selected{% endif %}>{{ option.label }}</option>
+                    <select name="source" class="toolset-os-select">
+                        {% for option in toolset_source_options %}
+                        <option value="{{ option.value }}" {% if option.value == toolset_source %}selected{% endif %}>{{ option.label }}</option>
                         {% endfor %}
                     </select>
-                    <select name="search_mode" class="toolset-os-select">
-                        {% for option in search_mode_options %}
-                        <option value="{{ option.value }}" {% if option.value == search_mode %}selected{% endif %}>{{ option.label }}</option>
-                        {% endfor %}
-                    </select>
-                    <button type="submit">搜索</button>
-                    {% if toolset_keyword %}
-                    <a class="chip" href="{% url 'toolset_list' %}?os={{ toolset_os }}&search_engine={{ search_engine }}&search_mode={{ search_mode }}">清空</a>
-                    {% endif %}
+                    <button type="submit">按系统筛选</button>
                 </form>
             </div>
             <div class="meta">信息来源：`tools` 目录及各工具集 `README.md`。</div>
             {% if toolset_keyword %}
             <div class="meta" style="margin-top: 6px;">检索引擎：{{ search_debug_meta.engine_used }}{% if search_debug_meta.fallback_used %}（已降级）{% endif %}{% if search_debug_meta.error %}，错误：{{ search_debug_meta.error }}{% endif %}</div>
-            {% endif %}
-        </section>
-
-        <section class="panel knowledge-card">
-            <div><strong>知识库整理</strong></div>
-            <div class="meta">按当前项目执行：`doc/01-or` -> `data/temp/knowledge_reports`，并展示最新报告预览。</div>
-            <form method="post" action="{% url 'toolset_list' %}" style="margin-top: 10px; display: flex; gap: 8px; align-items: center;">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="run_knowledge_curation">
-                <input type="hidden" name="q" value="{{ toolset_keyword }}">
-                <input type="hidden" name="os" value="{{ toolset_os }}">
-                <input type="hidden" name="search_engine" value="{{ search_engine }}">
-                <input type="hidden" name="search_mode" value="{{ search_mode }}">
-                <button type="submit">一键执行知识库整理</button>
-            </form>
-
-            {% if knowledge_curation_notice %}
-            <div class="meta" style="color: #84d8a7;">{{ knowledge_curation_notice }}</div>
-            {% endif %}
-            {% if knowledge_curation_error %}
-            <div class="meta" style="color: #ff8f8f;">{{ knowledge_curation_error }}</div>
-            {% endif %}
-
-            {% if knowledge_curation_result %}
-            <div class="meta">知识目录：{{ knowledge_curation_result.knowledge_dir }}</div>
-            <div class="meta">报告目录：{{ knowledge_curation_result.output_dir }}</div>
-            {% if knowledge_curation_result.report_path %}
-            <div class="meta">报告文件：{{ knowledge_curation_result.report_path }}</div>
-            {% endif %}
-
-            <div class="knowledge-result-grid">
-                <div class="knowledge-kpi">
-                    <strong>{{ knowledge_curation_result.health.total_items|default:0 }}</strong>
-                    <div class="meta">知识项总数</div>
-                </div>
-                <div class="knowledge-kpi">
-                    <strong>{{ knowledge_curation_result.health.orphaned_count|default:0 }}</strong>
-                    <div class="meta">孤立项数量</div>
-                </div>
-                <div class="knowledge-kpi">
-                    <strong>{{ knowledge_curation_result.duplicates.candidate_count|default:0 }}</strong>
-                    <div class="meta">重复候选数量</div>
-                </div>
-            </div>
-
-            {% if knowledge_curation_result.report_preview %}
-            <pre class="knowledge-report-preview">{{ knowledge_curation_result.report_preview }}</pre>
-            {% endif %}
             {% endif %}
         </section>
 
@@ -178,11 +85,25 @@
                     <div class="meta">目录：{{ item.directory }}</div>
                     <div class="meta">README：{% if item.readme_exists %}已存在{% else %}缺失{% endif %}</div>
                     <div class="meta">更新时间：{{ item.updated_at|date:"Y-m-d H:i" }}</div>
+                    <div class="meta">状态：{% if item.enabled %}已启用{% else %}已停用{% endif %}</div>
+                    <div class="meta">工具源：{{ item.source_text }}</div>
                     <div class="meta">支持系统：{{ item.os_support_text }}</div>
                     <div class="meta">摘要：{{ item.summary }}</div>
                     {% if item.search_score %}
                     <div class="meta">检索得分：{{ item.search_score|floatformat:4 }}</div>
                     {% endif %}
+                    <form method="post" action="{% url 'toolset_list' %}" style="margin-top: 8px;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="toggle_toolset_enabled">
+                        <input type="hidden" name="toolset_key" value="{{ item.name }}">
+                        <input type="hidden" name="target_action" value="{% if item.enabled %}disable{% else %}enable{% endif %}">
+                        <input type="hidden" name="q" value="{{ toolset_keyword }}">
+                        <input type="hidden" name="os" value="{{ toolset_os }}">
+                        <input type="hidden" name="source" value="{{ toolset_source }}">
+                        <input type="hidden" name="search_engine" value="{{ search_engine }}">
+                        <input type="hidden" name="search_mode" value="{{ search_mode }}">
+                        <button type="submit">{% if item.enabled %}停用{% else %}启用{% endif %}</button>
+                    </form>
                     <div style="margin-top: 8px;">
                         <div class="meta">Python 文件：</div>
                         {% if item.python_files %}

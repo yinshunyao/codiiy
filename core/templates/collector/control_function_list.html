@@ -14,19 +14,11 @@
         flex-wrap: nowrap;
         margin-bottom: 10px;
     }
-    .control-search-form {
+    .control-filter-form {
         display: flex;
         align-items: center;
         gap: 8px;
-        flex: 1 1 auto;
-        min-width: 0;
         margin: 0;
-    }
-    .control-search-input {
-        width: 50%;
-        min-width: 260px;
-        height: 36px;
-        box-sizing: border-box;
     }
     .control-toolbar-btn {
         height: 36px;
@@ -92,28 +84,15 @@
 
         <section class="panel" style="margin-bottom: 12px;">
             <div class="control-toolbar">
-                <form method="get" action="{% url 'control_function_list' control_active_module %}" class="control-search-form">
-                    <input type="text" name="q" value="{{ control_keyword }}" placeholder="模糊搜索函数路径/描述/参数" class="control-search-input">
+                <a class="chip" href="{% url 'capability_search' %}">进入综合搜索</a>
+                <form method="get" action="{% url 'control_function_list' control_active_module %}" class="control-filter-form">
                     <select name="os" class="control-toolbar-btn">
                         {% for option in os_options %}
                         <option value="{{ option.value }}" {% if option.value == control_os %}selected{% endif %}>{{ option.label }}</option>
                         {% endfor %}
                     </select>
-                    <select name="search_engine" class="control-toolbar-btn">
-                        {% for option in search_engine_options %}
-                        <option value="{{ option.value }}" {% if option.value == search_engine %}selected{% endif %}>{{ option.label }}</option>
-                        {% endfor %}
-                    </select>
-                    <select name="search_mode" class="control-toolbar-btn">
-                        {% for option in search_mode_options %}
-                        <option value="{{ option.value }}" {% if option.value == search_mode %}selected{% endif %}>{{ option.label }}</option>
-                        {% endfor %}
-                    </select>
-                    <button type="submit" class="control-toolbar-btn">搜索</button>
+                    <button type="submit" class="control-toolbar-btn">按系统筛选</button>
                     <button type="button" id="upload-trigger-btn" class="control-toolbar-btn">上传</button>
-                    {% if control_keyword %}
-                    <a class="chip" href="{% url 'control_function_list' control_active_module %}?os={{ control_os }}&search_engine={{ search_engine }}&search_mode={{ search_mode }}">清空</a>
-                    {% endif %}
                 </form>
             </div>
             {% if control_keyword %}

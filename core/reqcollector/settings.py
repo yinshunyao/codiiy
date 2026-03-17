@@ -1,8 +1,12 @@
 import os
 from pathlib import Path
 
+from reqcollector.path_bootstrap import ENV_PROJECT_ROOT_KEY, resolve_project_root
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+CORE_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = resolve_project_root(os.getenv(ENV_PROJECT_ROOT_KEY, ""))
+# 兼容 Django 默认命名，保留 BASE_DIR 指向 core 目录。
+BASE_DIR = CORE_DIR
 
 SECRET_KEY = "django-insecure-change-me-in-production"
 DEBUG = True
@@ -102,9 +106,30 @@ try:
     CHAT_REPLY_EMIT_INTERVAL_SECONDS = float(os.getenv("CHAT_REPLY_EMIT_INTERVAL_SECONDS", "1"))
 except ValueError:
     CHAT_REPLY_EMIT_INTERVAL_SECONDS = 1.0
+try:
+    CHAT_REPLY_TASK_TIMEOUT_SECONDS = float(os.getenv("CHAT_REPLY_TASK_TIMEOUT_SECONDS", "180"))
+except ValueError:
+    CHAT_REPLY_TASK_TIMEOUT_SECONDS = 180.0
+try:
+    CHAT_REPLY_TASK_HEARTBEAT_INTERVAL_SECONDS = float(
+        os.getenv("CHAT_REPLY_TASK_HEARTBEAT_INTERVAL_SECONDS", "1.5")
+    )
+except ValueError:
+    CHAT_REPLY_TASK_HEARTBEAT_INTERVAL_SECONDS = 1.5
+try:
+    CHAT_REPLY_TASK_STUCK_GRACE_SECONDS = float(os.getenv("CHAT_REPLY_TASK_STUCK_GRACE_SECONDS", "20"))
+except ValueError:
+    CHAT_REPLY_TASK_STUCK_GRACE_SECONDS = 20.0
+try:
+    CHAT_REPLY_TASK_TRACE_MAX_EVENTS = int(os.getenv("CHAT_REPLY_TASK_TRACE_MAX_EVENTS", "500"))
+except ValueError:
+    CHAT_REPLY_TASK_TRACE_MAX_EVENTS = 500
 COMPANION_CAPABILITY_SEARCH_MODE = str(os.getenv("COMPANION_CAPABILITY_SEARCH_MODE", "hybrid")).strip().lower() or "hybrid"
 if COMPANION_CAPABILITY_SEARCH_MODE not in {"traditional", "vector", "hybrid"}:
     COMPANION_CAPABILITY_SEARCH_MODE = "hybrid"
+COMPANION_MINDFORGE_STRATEGY = str(os.getenv("COMPANION_MINDFORGE_STRATEGY", "auto")).strip().lower() or "auto"
+if COMPANION_MINDFORGE_STRATEGY not in {"auto", "react", "cot", "plan_execute", "reflexion"}:
+    COMPANION_MINDFORGE_STRATEGY = "auto"
 
 # 本地模型服务自动启动配置
 LOCAL_LLM_AUTO_START = str(os.getenv("LOCAL_LLM_AUTO_START", "1")).strip().lower() in {"1", "true", "yes", "on"}

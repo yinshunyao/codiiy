@@ -74,9 +74,9 @@
                     {% endif %}
                 </form>
             </div>
-            <div class="meta">信息来源：`.cursor/skills` 目录。</div>
+            <div class="meta">信息来源：`agents/skills` 目录。</div>
             <div class="meta" style="margin-top: 8px;">
-                导入说明：仅支持 `.zip`，压缩包必须只包含一个技能目录；导入后自动解压到 `.cursor/skills/<skill_name>` 目录。
+                导入说明：仅支持 `.zip`，压缩包必须只包含一个技能目录；导入后自动解压到 `agents/skills/<skill_name>` 目录。
             </div>
             <form method="post" action="{% url 'system_skill_upload' %}" enctype="multipart/form-data" id="skill-zip-upload-form" style="display: none;">
                 {% csrf_token %}

@@ -25,7 +25,32 @@ python manage.py migrate
 - 用户名：`admin`
 - 密码：`123456`
 
-## 4. 统一命令文件运行（macOS / Ubuntu）
+## 4. 项目目录参数（新增）
+系统根目录默认是 `core` 的上一级目录；可在 Django 启动前显式覆盖。
+
+### 4.1 `manage.py` 参数方式
+
+在仓库根目录执行：
+
+```bash
+python core/manage.py runserver --project-dir /absolute/path/to/project_root
+```
+
+也支持相对路径（相对于默认系统根目录）：
+
+```bash
+python core/manage.py runserver --project-dir projects/demo
+```
+
+### 4.2 WSGI / ASGI 环境变量方式
+
+```bash
+export CODIIY_PROJECT_ROOT=/absolute/path/to/project_root
+```
+
+未设置 `CODIIY_PROJECT_ROOT` 且未传 `--project-dir` 时，自动使用默认值：`core` 的上一级目录。
+
+## 5. 统一命令文件运行（macOS / Ubuntu）
 在 `core` 下使用 `manage.sh`，脚本会自动完成以下动作：
 1. 检查 `python3`
 2. 不存在 `.venv` 时自动创建虚拟环境
@@ -38,7 +63,7 @@ python manage.py migrate
 chmod +x manage.sh
 ```
 
-### 4.1 默认启动（开发环境）
+### 5.1 默认启动（开发环境）
 
 ```bash
 ./manage.sh
@@ -47,15 +72,16 @@ chmod +x manage.sh
 默认访问地址：`http://127.0.0.1:8000/`
 说明：日常启动时，若 `requirements.txt` 未变化，不会重复安装依赖。
 
-### 4.2 指定 Django 命令
+### 5.2 指定 Django 命令
 
 ```bash
 ./manage.sh migrate
 ./manage.sh createsuperuser
 ./manage.sh runserver 0.0.0.0:8000
+./manage.sh runserver --project-dir /absolute/path/to/project_root
 ```
 
-### 4.3 脚本参数
+### 5.3 脚本参数
 
 ```bash
 # 首次初始化环境并退出（不执行 Django 命令）
@@ -68,7 +94,7 @@ chmod +x manage.sh
 ./manage.sh --skip-install runserver
 ```
 
-### 4.4 配置 QWEN_API_KEY（可选）
+### 5.4 配置 QWEN_API_KEY（可选）
 方式一：临时注入（仅本次命令生效）
 
 ```bash
@@ -82,20 +108,20 @@ export QWEN_API_KEY=你的key
 ./manage.sh
 ```
 
-## 5. 常用页面
+## 6. 常用页面
 1. 登录页：`/accounts/login/`
 2. 会话列表：`/sessions/`
 3. 新建会话：`/sessions/new/`
 4. 修改密码：`/accounts/password/change/`
 5. 管理后台：`/admin/`
 
-## 6. 常见问题
+## 7. 常见问题
 1. 提示 `No module named django`
 - 先执行 `./manage.sh --reinstall` 让脚本重建依赖，或手动执行 `python3 -m pip install --user -r requirements.txt`
 2. 默认管理员无法登录
 - 确认是否首次迁移前已存在用户；如已存在用户，初始化逻辑不会重复创建默认 admin
 
-## 7. 本地屏幕理解组件（control/observe）
+## 8. 本地屏幕理解组件（control/observe）
 1. 安装依赖（示例）：
 
 ```bash

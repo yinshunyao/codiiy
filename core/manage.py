@@ -1,15 +1,18 @@
 #!/usr/bin/env python
 import os
 import sys
-from pathlib import Path
+
+from reqcollector.path_bootstrap import configure_process_project_root, extract_project_root_arg
 
 
 def main() -> None:
-    # 兼容从 core 目录启动时导入仓库级包（tools/component）。
-    repo_root = Path(__file__).resolve().parent.parent
-    repo_root_text = str(repo_root)
-    if repo_root_text not in sys.path:
-        sys.path.insert(0, repo_root_text)
+    try:
+        normalized_argv, project_dir_arg = extract_project_root_arg(sys.argv)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    sys.argv = normalized_argv
+    # 启动前支持 --project-dir 显式指定；缺省时回退到 core 的上一级目录。
+    configure_process_project_root(project_dir_arg)
 
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "reqcollector.settings")
     try:
