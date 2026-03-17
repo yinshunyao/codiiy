@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}综合搜索{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-search {
+        grid-template-columns: 260px 1fr;
+    }
+    .capability-search-form {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin: 0;
+    }
+    .capability-search-input-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+    .capability-search-input {
+        flex: 1 1 auto;
+        min-width: 320px;
+        height: 36px;
+        box-sizing: border-box;
+    }
+    .capability-search-filter-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        align-items: center;
+    }
+    .capability-search-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 13px;
+    }
+    .capability-search-item {
+        margin-bottom: 10px;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+
+<div class="app-shell app-shell-search">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">综合搜索</span>
+                <span class="chip">结果：{{ search_total }}</span>
+                <span class="chip">智能体：{{ search_type_count.agent }}</span>
+                <span class="chip">工具集：{{ search_type_count.toolset }}</span>
+                <span class="chip">组件：{{ search_type_count.component }}</span>
+                {% if current_project %}
+                <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
+                {% endif %}
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'session_list' %}">返回对话页</a>
+            </div>
+        </div>
+
+        <section class="panel">
+            <form method="get" action="{% url 'capability_search' %}" class="capability-search-form">
+                <div class="capability-search-input-row">
+                    <input
+                        type="text"
+                        name="q"
+                        value="{{ search_keyword }}"
+                        class="capability-search-input"
+                        placeholder="默认综合搜索（智能体 / 工具集 / 组件）"
+                    >
+                    <button type="submit">搜索</button>
+                </div>
+                <div class="capability-search-filter-row">
+                    {% for option in search_type_options %}
+                    <label class="capability-search-check">
+                        <input type="checkbox" name="types" value="{{ option.value }}" {% if option.value in search_selected_types %}checked{% endif %}>
+                        <span>{{ option.label }}</span>
+                    </label>
+                    {% endfor %}
+                    <select name="search_engine" style="height: 36px;">
+                        {% for option in search_engine_options %}
+                        <option value="{{ option.value }}" {% if option.value == search_engine %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <select name="search_mode" style="height: 36px;">
+                        {% for option in search_mode_options %}
+                        <option value="{{ option.value }}" {% if option.value == search_mode %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </form>
+            {% if search_keyword %}
+            <div class="meta" style="margin-top: 8px;">检索引擎：{{ search_debug_meta.engine_used }}{% if search_debug_meta.fallback_used %}（已降级）{% endif %}{% if search_debug_meta.error %}，错误：{{ search_debug_meta.error }}{% endif %}</div>
+            {% else %}
+            <div class="meta" style="margin-top: 8px;">请输入关键词后执行综合搜索；默认同时检索三类能力，可按类型筛选。</div>
+            {% endif %}
+        </section>
+
+        <section class="conversation panel" style="margin-top: 12px;">
+            {% if search_results %}
+                {% for item in search_results %}
+                <div class="panel capability-search-item">
+                    <div><strong>{{ item.name }}</strong></div>
+                    <div class="meta">类型：{{ item.kind_label }}</div>
+                    <div class="meta">模块：{{ item.module_label|default:"-" }}</div>
+                    <div class="meta">路径：{{ item.path|default:"-" }}</div>
+                    <div class="meta">摘要：{{ item.description }}</div>
+                    <div class="meta">得分：{{ item.score|floatformat:4 }}</div>
+                    {% if item.jump_url %}
+                    <div style="margin-top: 8px;">
+                        <a class="chip" href="{{ item.jump_url }}">进入对应列表</a>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            {% elif search_keyword %}
+                <div class="panel">当前条件没有匹配结果。</div>
+            {% else %}
+                <div class="panel">等待输入关键词。</div>
+            {% endif %}
+        </section>
+    </main>
+</div>
+
+<script>
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}

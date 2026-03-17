@@ -1,0 +1,1 @@
+{"type":"single_select","title":"cursor-cli 工具不可用，请选择后续操作：","description":"当前环境缺少 cursor-cli，无法执行您的硬性要求。请选择一项：","required":true,"options":[{"value":"install","label":"请提供 cursor-cli 官方安装指引（推荐 macOS）"},{"value":"relax","label":"允许我改用 handle_write_file 工具完成（跳过 cursor-cli 要求）"},{"value":"retry","label":"我已手动安装 cursor-cli，请重试调用"}],"submit_label":"确认"}
