@@ -1,15 +1,15 @@
-<div class="brand">柯镇不恶</div>
+<div class="brand" title="{{ menu_labels.system_name_hint }}">{{ menu_labels.system_name }}</div>
 
 <div class="menu-tree">
     <section class="menu-section is-open" data-menu-section>
         <button type="button" class="menu-section-toggle" data-menu-toggle>
-            <span>聊天</span>
+            <span title="{{ menu_labels.chat_group_hint }}">{{ menu_labels.chat_group }}</span>
             <span class="menu-toggle-mark">-</span>
         </button>
         <div class="menu-section-body">
             <div class="menu-item-row">
                 <a class="menu-item-link menu-item-main {% if current_nav == 'chat' %}active{% endif %}" href="{% url 'session_list' %}">
-                    聊天
+                    <span title="{{ menu_labels.chat_main_hint }}">{{ menu_labels.chat_main }}</span>
                     <div class="meta">主聊天会话 / 全量记录</div>
                 </a>
             </div>
@@ -24,41 +24,35 @@
                     <span class="friend-time">{% if item.last_chat_at %}{{ item.last_chat_at|date:"m-d H:i" }}{% endif %}</span>
                 </a>
                 {% empty %}
-                <div class="meta" style="padding: 4px 10px;">暂无伙伴，点击下方 + 创建</div>
+                <div class="meta" style="padding: 4px 10px;">暂无最近伙伴会话</div>
                 {% endfor %}
-            </div>
-            <div class="menu-item-row">
-                <a class="menu-item-link menu-item-main {% if current_nav == 'companions' and not current_companion_nav_id %}active{% endif %}" href="{% url 'companion_list' %}">
-                    伙伴管理
-                    <div class="meta">通讯录总览 / 配置编辑</div>
-                </a>
-                <a class="menu-item-add-btn" href="{% url 'companion_create' %}" title="新增伙伴" aria-label="新增伙伴">+</a>
             </div>
         </div>
     </section>
 
-    <section class="menu-section {% if current_nav == 'agent_items' or current_nav == 'system_skills' or current_nav == 'system_rules' %}is-open{% endif %}" data-menu-section>
+    <section class="menu-section {% if current_nav == 'agent_items' or current_nav == 'system_skills' or current_nav == 'system_rules' or current_nav == 'toolset_list' or current_nav == 'companions' %}is-open{% endif %}" data-menu-section>
         <button type="button" class="menu-section-toggle" data-menu-toggle>
-            <span>智能体（agents）</span>
-            <span class="menu-toggle-mark">{% if current_nav == 'agent_items' or current_nav == 'system_skills' or current_nav == 'system_rules' %}-{% else %}+{% endif %}</span>
+            <span title="{{ menu_labels.agent_group_hint }}">{{ menu_labels.agent_group }}</span>
+            <span class="menu-toggle-mark">{% if current_nav == 'agent_items' or current_nav == 'system_skills' or current_nav == 'system_rules' or current_nav == 'toolset_list' or current_nav == 'companions' %}-{% else %}+{% endif %}</span>
         </button>
         <div class="menu-section-body">
+            <a class="menu-item-link {% if current_nav == 'companions' and not current_companion_nav_id %}active{% endif %}" href="{% url 'companion_list' %}" title="{{ menu_labels.companion_management_hint }}">{{ menu_labels.companion_management }}</a>
+            <a class="menu-item-link {% if current_nav == 'toolset_list' %}active{% endif %}" href="{% url 'toolset_list' %}" title="{{ menu_labels.toolset_hint }}">{{ menu_labels.toolset }}</a>
             {% for module_key, module_label in agent_modules.items %}
             {% if module_key != "mindforge" %}
             <a class="menu-item-link {% if agent_active_module == module_key %}active{% endif %}" href="{% url 'agent_item_list' module_key %}">{{ module_label }}（{{ module_key }}）</a>
             {% endif %}
             {% endfor %}
-            <a class="menu-item-link {% if current_nav == 'system_rules' %}active{% endif %}" href="{% url 'system_rule_list' %}">规则（rules）</a>
+            <a class="menu-item-link {% if current_nav == 'system_rules' %}active{% endif %}" href="{% url 'system_rule_list' %}" title="{{ menu_labels.rules_hint }}">{{ menu_labels.rules }}</a>
         </div>
     </section>
 
-    <section class="menu-section {% if current_nav == 'toolset_list' or control_active_module %}is-open{% endif %}" data-menu-section>
+    <section class="menu-section {% if control_active_module %}is-open{% endif %}" data-menu-section>
         <button type="button" class="menu-section-toggle" data-menu-toggle>
-            <span>工具组件</span>
-            <span class="menu-toggle-mark">{% if current_nav == 'toolset_list' or control_active_module %}-{% else %}+{% endif %}</span>
+            <span title="{{ menu_labels.component_group_hint }}">{{ menu_labels.component_group }}</span>
+            <span class="menu-toggle-mark">{% if control_active_module %}-{% else %}+{% endif %}</span>
         </button>
         <div class="menu-section-body">
-            <a class="menu-item-link {% if current_nav == 'toolset_list' %}active{% endif %}" href="{% url 'toolset_list' %}">工具集</a>
             {% for module_key, module_label in control_modules.items %}
             <a class="menu-item-link {% if control_active_module == module_key %}active{% endif %}" href="{% url 'control_function_list' module_key %}">{{ module_label }}（{{ module_key }}）</a>
             {% endfor %}
@@ -67,7 +61,7 @@
 
     <section class="menu-section {% if current_nav == 'models_api' or current_nav == 'models_local' %}is-open{% endif %}" data-menu-section>
         <button type="button" class="menu-section-toggle" data-menu-toggle>
-            <span>模型</span>
+            <span>{{ menu_labels.model_group }}</span>
             <span class="menu-toggle-mark">{% if current_nav == 'models_api' or current_nav == 'models_local' %}-{% else %}+{% endif %}</span>
         </button>
         <div class="menu-section-body">
@@ -78,7 +72,7 @@
 
     <section class="menu-section {% if current_nav == 'settings_projects' or current_nav == 'settings_requirements' or current_nav == 'settings_profile' or current_nav == 'settings_admin' %}is-open{% endif %}" data-menu-section>
         <button type="button" class="menu-section-toggle" data-menu-toggle>
-            <span>设置</span>
+            <span>{{ menu_labels.settings_group }}</span>
             <span class="menu-toggle-mark">{% if current_nav == 'settings_projects' or current_nav == 'settings_requirements' or current_nav == 'settings_profile' or current_nav == 'settings_admin' %}-{% else %}+{% endif %}</span>
         </button>
         <div class="menu-section-body">

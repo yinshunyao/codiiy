@@ -137,7 +137,7 @@ class OrchestrationTestCase(unittest.TestCase):
         planner = CustomPlanner()
         plan = planner.build_plan(
             user_query="帮我分析",
-            allowed_agent_modules=["mindforge", "helm"],
+            allowed_agent_modules=["mindforge"],
             allowed_control_modules=["observe"],
             allowed_control_components=[],
             allowed_control_functions=[],
@@ -147,7 +147,6 @@ class OrchestrationTestCase(unittest.TestCase):
         )
         targets = [item.target for item in plan.steps]
         self.assertIn("mindforge", targets)
-        self.assertIn("helm", targets)
         self.assertEqual(plan.steps[-1].step_type, "summarize")
 
     @patch("collector.orchestration.planner.analyzer.chat")
@@ -158,10 +157,9 @@ class OrchestrationTestCase(unittest.TestCase):
   "goal": "test",
   "steps": [
     {"step_id":"a1","step_type":"agent","target":"mindforge","input":{"query":"1"},"depends_on":[]},
-    {"step_id":"a2","step_type":"command","target":"helm","input":{"query":"2"},"depends_on":[]},
     {"step_id":"a3","step_type":"tool","target":"component.observe.understand_current_screen","input":{"query":"3"},"depends_on":["a1"]},
     {"step_id":"a4","step_type":"tool","target":"component.observe.understand_current_screen","input":{"query":"4"},"depends_on":["a3"]},
-    {"step_id":"a5","step_type":"summarize","target":"answer_synthesizer","input":{"query":"5"},"depends_on":["a1","a2","a3","a4"]}
+    {"step_id":"a5","step_type":"summarize","target":"answer_synthesizer","input":{"query":"5"},"depends_on":["a1","a3","a4"]}
   ]
 }""",
             "error": None,
@@ -169,7 +167,7 @@ class OrchestrationTestCase(unittest.TestCase):
         planner = CustomPlanner()
         plan = planner.build_plan(
             user_query="帮我分析",
-            allowed_agent_modules=["mindforge", "helm"],
+            allowed_agent_modules=["mindforge"],
             allowed_control_modules=["observe"],
             allowed_control_components=[],
             allowed_control_functions=[],
@@ -186,7 +184,7 @@ class OrchestrationTestCase(unittest.TestCase):
         planner = CustomPlanner()
         plan = planner.build_plan(
             user_query="请帮我分析并截图当前界面",
-            allowed_agent_modules=["mindforge", "helm"],
+            allowed_agent_modules=["mindforge"],
             allowed_control_modules=["observe", "decide"],
             allowed_control_components=[],
             allowed_control_functions=[],
@@ -194,10 +192,8 @@ class OrchestrationTestCase(unittest.TestCase):
         step_types = [item.step_type for item in plan.steps]
         targets = [item.target for item in plan.steps]
         self.assertIn("agent", step_types)
-        self.assertIn("command", step_types)
         self.assertIn("summarize", step_types)
         self.assertIn("mindforge", targets)
-        self.assertIn("helm", targets)
 
     @patch("collector.orchestration.planner.search_tool_functions")
     @patch("collector.orchestration.planner.analyzer.chat")
@@ -210,7 +206,7 @@ class OrchestrationTestCase(unittest.TestCase):
         planner = CustomPlanner()
         plan = planner.build_plan(
             user_query="帮我查询一下磁盘剩余空间",
-            allowed_agent_modules=["mindforge", "helm"],
+            allowed_agent_modules=["mindforge"],
             allowed_toolsets=["file_operator_tool"],
             allowed_control_modules=[],
             allowed_control_components=[],
@@ -224,28 +220,8 @@ class OrchestrationTestCase(unittest.TestCase):
         self.assertEqual(step_types, ["tool", "summarize"])
         self.assertEqual(targets[0], "tools.file_operator_tool.read_file")
         self.assertNotIn("mindforge", targets)
-        self.assertNotIn("helm", targets)
         summarize_input = plan.steps[-1].input or {}
         self.assertFalse(bool(summarize_input.get("enable_completion_signal", True)))
-
-    @patch("collector.orchestration.planner.analyzer.chat")
-    def test_planner_should_skip_helm_when_query_not_about_requirement_phase(self, mock_chat):
-        mock_chat.return_value = {"success": False, "response": "", "error": "planner llm unavailable"}
-        planner = CustomPlanner()
-        plan = planner.build_plan(
-            user_query="请解释一下这个错误提示",
-            allowed_agent_modules=["mindforge", "helm"],
-            allowed_toolsets=[],
-            allowed_control_modules=[],
-            allowed_control_components=[],
-            allowed_control_functions=[],
-            capability_search_mode="hybrid",
-            model_id="qwen-plus",
-            max_plan_steps=8,
-        )
-        targets = [item.target for item in plan.steps]
-        self.assertIn("mindforge", targets)
-        self.assertNotIn("helm", targets)
 
     @patch("collector.orchestration.planner.search_tool_functions")
     @patch("collector.orchestration.planner.analyzer.chat")
@@ -255,7 +231,7 @@ class OrchestrationTestCase(unittest.TestCase):
         planner = CustomPlanner()
         plan = planner.build_plan(
             user_query="请查询当前磁盘剩余空间",
-            allowed_agent_modules=["mindforge", "helm"],
+            allowed_agent_modules=["mindforge"],
             allowed_toolsets=["macos_terminal_tool"],
             allowed_control_modules=[],
             allowed_control_components=[],

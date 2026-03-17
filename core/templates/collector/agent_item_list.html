@@ -27,6 +27,17 @@
         justify-content: space-between;
         gap: 10px;
     }
+    .agent-meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        margin-top: 4px;
+    }
+    .agent-meta-item {
+        color: var(--muted-text-color, #666);
+        font-size: 13px;
+        line-height: 1.4;
+    }
     {% include "collector/partials/sidebar_menu_styles.css" %}
 </style>
 
@@ -81,16 +92,22 @@
                     <div class="agent-card-header">
                         <div style="min-width: 0;">
                             <div><strong>{{ item.name }}</strong></div>
-                            <div class="meta">目录：{{ item.directory }}</div>
-                            <div class="meta">README.md：{% if item.readme_exists %}已存在{% else %}缺失{% endif %}</div>
-                            <div class="meta">更新时间：{{ item.updated_at|date:"Y-m-d H:i" }}</div>
-                            <div class="meta">摘要：{{ item.summary }}</div>
-                            {% if item.search_score %}
-                            <div class="meta">检索得分：{{ item.search_score|floatformat:4 }}</div>
-                            {% endif %}
+                            <div class="agent-meta-row">
+                                <div class="agent-meta-item">目录：{{ item.directory }}</div>
+                                <div class="agent-meta-item">README.md：{% if item.readme_exists %}已存在{% else %}缺失{% endif %}</div>
+                                <div class="agent-meta-item">更新时间：{{ item.updated_at|date:"Y-m-d H:i" }}</div>
+                                {% if item.search_score %}
+                                <div class="agent-meta-item">检索得分：{{ item.search_score|floatformat:4 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="meta" style="margin-top: 4px;">摘要：{{ item.summary }}</div>
                         </div>
-                        <div style="white-space: nowrap;">
+                        <div style="white-space: nowrap; display: flex; gap: 6px; align-items: center;">
                             <a class="chip" href="{% url 'agent_item_download' agent_active_module item.name %}">导出</a>
+                            <form method="post" action="{% url 'agent_item_delete' agent_active_module item.name %}" style="margin: 0;" onsubmit="return confirm('确定要删除智能体项「{{ item.name }}」吗？此操作不可恢复。');">
+                                {% csrf_token %}
+                                <button type="submit" class="chip" style="color: var(--error, #e74c3c); cursor: pointer;">删除</button>
+                            </form>
                         </div>
                     </div>
                     <div style="margin-top: 8px;">

@@ -16,13 +16,63 @@
 - 统一返回：
   - 成功：`{"success": True, "data": {...}}`
   - 失败：`{"success": False, "error": "错误信息"}`
-- 关键 API：
-  - `create_terminal_object(cwd="", shell_mode="zsh")`
-  - `input_output(object_id, command, timeout_seconds=30.0, read_incremental_output=False)`
-  - `run_command(command, cwd="", shell_mode="zsh", timeout_seconds=30.0)`（一次性执行，自动创建/关闭会话）
-  - `read_output(object_id, offset=None, update_offset=True)`
-  - `close_terminal_object(object_id)`
-  - `list_terminal_objects()`
+
+## API
+
+### `create_terminal_object(cwd: str = "", shell_mode: str = "zsh") -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `cwd` | `str` | `""` | 终端初始工作目录。 |
+| `shell_mode` | `str` | `"zsh"` | Shell 类型，如 `zsh`。 |
+
+返回 `data` 字段：`object_id`、`cwd`、`shell_mode`（按实现返回）。
+
+### `input_output(object_id: str, command: str, timeout_seconds: float = 30.0, read_incremental_output: bool = False) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `object_id` | `str` | 必填 | 已创建终端对象 ID。 |
+| `command` | `str` | 必填 | 要执行的 shell 命令。 |
+| `timeout_seconds` | `float` | `30.0` | 命令执行超时时间。 |
+| `read_incremental_output` | `bool` | `False` | 是否按增量模式读取输出。 |
+
+返回 `data` 字段：`output`、`offset`（按实现返回）。
+
+### `run_command(command: str, cwd: str = "", shell_mode: str = "zsh", timeout_seconds: float = 30.0) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `command` | `str` | 必填 | 要执行的 shell 命令。 |
+| `cwd` | `str` | `""` | 一次性会话的工作目录。 |
+| `shell_mode` | `str` | `"zsh"` | Shell 类型。 |
+| `timeout_seconds` | `float` | `30.0` | 命令执行超时时间。 |
+
+返回 `data` 字段：`output`、`exit_code`（按实现返回）。该方法自动创建并关闭会话。
+
+### `read_output(object_id: str, offset: Optional[int] = None, update_offset: bool = True) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `object_id` | `str` | 必填 | 终端对象 ID。 |
+| `offset` | `Optional[int]` | `None` | 输出读取起始偏移。 |
+| `update_offset` | `bool` | `True` | 是否在返回中更新偏移位置。 |
+
+返回 `data` 字段：`output`、`offset`。
+
+### `close_terminal_object(object_id: str) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `object_id` | `str` | 必填 | 待关闭的终端对象 ID。 |
+
+返回 `data` 字段：`object_id`、`closed`（按实现返回）。
+
+### `list_terminal_objects() -> Dict`
+
+无参数。
+
+返回 `data` 字段：`objects`（终端对象列表，包含 `object_id`、`cwd`、`shell_mode`、`status`）。
 
 ## 依赖组件
 

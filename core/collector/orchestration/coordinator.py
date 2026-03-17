@@ -7,7 +7,6 @@ from typing import Dict, List
 from django.utils import timezone
 
 from ..services import analyzer
-from .helm_runner import HelmRunner
 from .mindforge_runner import MindforgeRunner
 from .protocol import (
     OrchestrationResult,
@@ -16,7 +15,6 @@ from .protocol import (
     STEP_STATUS_SKIPPED,
     STEP_STATUS_SUCCESS,
     STEP_TYPE_AGENT,
-    STEP_TYPE_COMMAND,
     STEP_TYPE_SUMMARIZE,
     STEP_TYPE_TOOL,
     StepResult,
@@ -32,7 +30,6 @@ class Coordinator:
 
     def __init__(self):
         self.mindforge_runner = MindforgeRunner()
-        self.helm_runner = HelmRunner()
         self.tool_runner = ToolRunner()
         self._event_callback = None
 
@@ -145,50 +142,6 @@ class Coordinator:
                         self._new_trace_event(
                             kind="llm_call",
                             title=f"{step.step_id} 心法执行结果",
-                            status=status,
-                            output_data=self._summarize_payload(output),
-                            error=error,
-                        )
-                    )
-
-                elif step.step_type == STEP_TYPE_COMMAND and step.target == "helm":
-                    executor = "helmRunner"
-                    logger.info("[orchestration] step=%s executor=%s target=%s start", step.step_id, executor, step.target)
-                    step_trace.append(
-                        self._new_trace_event(
-                            kind="process",
-                            title=f"{step.step_id} 开始执行号令步骤",
-                            status="running",
-                            input_data={
-                                "step_type": step.step_type,
-                                "target": step.target,
-                                "phase": phase,
-                                "query": str(step.input.get("query") or user_query),
-                            },
-                        )
-                    )
-                    if "helm" not in allowed_agents:
-                        error = "伙伴未授权 helm。"
-                    else:
-                        status, output = self.helm_runner.run(
-                            query=str(step.input.get("query") or user_query),
-                            phase=phase,
-                        )
-                        active_agent = "helm"
-                    logger.info("[orchestration] step=%s executor=%s target=%s end status=%s", step.step_id, executor, step.target, status)
-                    step_trace.append(
-                        self._new_trace_event(
-                            kind="process",
-                            title=f"{step.step_id} 号令步骤结束",
-                            status=status,
-                            output_data={"executor": executor, "duration_ms": max(0, now_ms() - start_ms)},
-                            error=error,
-                        )
-                    )
-                    step_trace.append(
-                        self._new_trace_event(
-                            kind="process",
-                            title=f"{step.step_id} 号令步骤结果",
                             status=status,
                             output_data=self._summarize_payload(output),
                             error=error,
@@ -923,7 +876,7 @@ class Coordinator:
         return (
             f"已完成对任务“{user_query}”的协同执行。"
             f"成功步骤 {ok_count} 个，失败步骤 {failed_count} 个。"
-            "如需我继续，可以指定下一步优先处理的模块（心法/号令/工具组件）。"
+            "如需我继续，可以指定下一步优先处理的模块（心法/工具集/组件）。"
         )
 
     @staticmethod

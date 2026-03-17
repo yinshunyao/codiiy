@@ -5,6 +5,7 @@ import ast
 import json
 import platform
 import re
+import shutil
 import time
 import zipfile
 import threading
@@ -29,12 +30,14 @@ from django.utils import timezone
 
 from agents.manager import (
     AGENT_MODULE_LABELS,
+    delete_agent_item as delete_agent_item_via_manager,
     get_agent_module_dir,
     list_agent_items as list_agent_items_via_manager,
     resolve_agent_item_dir as resolve_agent_item_dir_via_manager,
 )
 from tools.component_call_tool import ComponentCallTool
 from tools.manager import (
+    delete_toolset,
     filter_enabled_toolsets,
     get_toolset_enabled,
     list_toolsets,
@@ -218,6 +221,9 @@ THEME_LABELS = {
     THEME_LIGHT: "亮色",
 }
 DEFAULT_UI_THEME = THEME_DARK
+DEFAULT_MENU_NAMING_SCHEME = "wuxia"
+MENU_NAMING_SCHEME_SESSION_KEY = "menu_naming_scheme"
+MENU_NAMING_SCHEMES_FILE = Path(settings.PROJECT_ROOT) / "core" / "settings" / "menu_naming_schemes.json"
 DEFAULT_COMPONENT_CONFIG_NAME = "default"
 PERMISSION_RESTRICTION_SETTING_KEY = "permission_restriction_enabled"
 COMPANION_FINAL_STEP_WATCHDOG_SECONDS_SETTING_KEY = "companion_final_step_watchdog_seconds"
@@ -669,7 +675,7 @@ def _build_companion_chat_system_prompt(companion, current_project):
             "可用能力白名单：\n"
             f"{permission_mode_line}\n"
             f"- 工具集：{toolset_text}\n"
-            f"- 心法/号令模块：{agent_module_text}\n"
+            f"- 心法模块：{agent_module_text}\n"
             f"- 工具/组件模块：{control_module_text}\n"
             f"- 组件白名单：{component_text}\n"
             f"- 组件 API 白名单：{function_text}{function_suffix}\n"
@@ -695,7 +701,7 @@ def _build_companion_chat_system_prompt(companion, current_project):
     )
     sections.append(
         "执行要求：\n"
-        "- 回答时优先使用已配置的心法、号令、技能。\n"
+        "- 回答时优先使用已配置的心法、工具集、技能。\n"
         f"{execution_rule_line}\n"
         "- 输出需显式遵循规则约束，保持可执行和可追溯。"
     )
@@ -1947,6 +1953,194 @@ def _get_ui_theme(request):
     return theme
 
 
+def _load_menu_naming_schemes():
+    default_payload = {
+        "default_scheme": DEFAULT_MENU_NAMING_SCHEME,
+        "schemes": {
+            "standard": {
+                "label": "标准中文",
+                "labels": {
+                    "system_name": "codiiy平台",
+                    "system_name_hint": "系统名称",
+                    "chat_group": "聊天",
+                    "chat_group_hint": "聊天",
+                    "chat_main": "聊天",
+                    "chat_main_hint": "主聊天会话",
+                    "companion_management": "伙伴管理",
+                    "companion_management_hint": "伙伴列表与配置",
+                    "agent_group": "智能体（agents）",
+                    "agent_group_hint": "智能体能力管理",
+                    "toolset": "工具集",
+                    "toolset_hint": "工具能力集合",
+                    "rules": "规则（rules）",
+                    "rules_hint": "系统规则",
+                    "component_group": "组件",
+                    "component_group_hint": "组件能力管理",
+                    "model_group": "模型",
+                    "settings_group": "设置",
+                },
+                "control_module_labels": dict(ALLOWED_CONTROL_MODULES),
+            },
+            "wuxia": {
+                "label": "武侠风",
+                "labels": {
+                    "system_name": "开智枢",
+                    "system_name_hint": "codiiy平台",
+                    "chat_group": "江湖",
+                    "chat_group_hint": "聊天",
+                    "chat_main": "华山论剑",
+                    "chat_main_hint": "聊天",
+                    "companion_management": "侠谱",
+                    "companion_management_hint": "伙伴管理",
+                    "agent_group": "武库",
+                    "agent_group_hint": "智能体（agents）",
+                    "toolset": "兵刃",
+                    "toolset_hint": "工具集",
+                    "rules": "门规",
+                    "rules_hint": "规则（rules）",
+                    "component_group": "机枢",
+                    "component_group_hint": "组件",
+                    "model_group": "内功",
+                    "settings_group": "行囊",
+                },
+                "control_module_labels": {
+                    "communicate": "传音",
+                    "observe": "望气",
+                    "decide": "运筹",
+                    "handle": "出招",
+                },
+            },
+        },
+    }
+
+    try:
+        if MENU_NAMING_SCHEMES_FILE.exists():
+            with MENU_NAMING_SCHEMES_FILE.open("r", encoding="utf-8") as fp:
+                payload = json.load(fp) or {}
+            if isinstance(payload, dict):
+                schemes = payload.get("schemes")
+                if isinstance(schemes, dict) and schemes:
+                    return payload
+    except Exception:
+        pass
+    return default_payload
+
+
+def _build_menu_naming_context(request):
+    payload = _load_menu_naming_schemes()
+    schemes = payload.get("schemes") if isinstance(payload, dict) else {}
+    if not isinstance(schemes, dict) or not schemes:
+        schemes = {}
+    default_scheme = str(payload.get("default_scheme") or DEFAULT_MENU_NAMING_SCHEME).strip()
+    if default_scheme not in schemes:
+        default_scheme = next(iter(schemes.keys()), "standard")
+    selected = str(request.session.get(MENU_NAMING_SCHEME_SESSION_KEY, default_scheme)).strip()
+    if selected not in schemes:
+        selected = default_scheme
+    selected_payload = schemes.get(selected) or {}
+    labels = selected_payload.get("labels") if isinstance(selected_payload, dict) else {}
+    control_module_labels = (
+        selected_payload.get("control_module_labels") if isinstance(selected_payload, dict) else {}
+    )
+    if not isinstance(labels, dict):
+        labels = {}
+    if not isinstance(control_module_labels, dict):
+        control_module_labels = {}
+
+    merged_control_modules = {}
+    for module_key, module_label in ALLOWED_CONTROL_MODULES.items():
+        merged_control_modules[module_key] = (
+            str(control_module_labels.get(module_key) or "").strip() or module_label
+        )
+    options = []
+    for scheme_key, scheme_payload in schemes.items():
+        label = scheme_key
+        if isinstance(scheme_payload, dict):
+            label = str(scheme_payload.get("label") or "").strip() or scheme_key
+        options.append({"value": scheme_key, "label": label})
+    options.sort(key=lambda item: item["label"])
+
+    return {
+        "menu_naming_scheme": selected,
+        "menu_naming_default_scheme": default_scheme,
+        "menu_naming_options": options,
+        "menu_labels": {
+            "system_name": str(labels.get("system_name") or "codiiy平台"),
+            "system_name_hint": str(labels.get("system_name_hint") or "系统名称"),
+            "chat_group": str(labels.get("chat_group") or "聊天"),
+            "chat_group_hint": str(labels.get("chat_group_hint") or "聊天"),
+            "chat_main": str(labels.get("chat_main") or "聊天"),
+            "chat_main_hint": str(labels.get("chat_main_hint") or "主聊天会话"),
+            "companion_management": str(labels.get("companion_management") or "伙伴管理"),
+            "companion_management_hint": str(labels.get("companion_management_hint") or "伙伴列表与配置"),
+            "agent_group": str(labels.get("agent_group") or "智能体（agents）"),
+            "agent_group_hint": str(labels.get("agent_group_hint") or "智能体能力管理"),
+            "toolset": str(labels.get("toolset") or "工具集"),
+            "toolset_hint": str(labels.get("toolset_hint") or "工具能力集合"),
+            "rules": str(labels.get("rules") or "规则（rules）"),
+            "rules_hint": str(labels.get("rules_hint") or "系统规则"),
+            "component_group": str(labels.get("component_group") or "组件"),
+            "component_group_hint": str(labels.get("component_group_hint") or "组件能力管理"),
+            "model_group": str(labels.get("model_group") or "模型"),
+            "settings_group": str(labels.get("settings_group") or "设置"),
+        },
+        "menu_control_modules": merged_control_modules,
+    }
+
+
+def _save_menu_naming_schemes(payload):
+    if not isinstance(payload, dict):
+        return False, "配置结构无效"
+    try:
+        MENU_NAMING_SCHEMES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with MENU_NAMING_SCHEMES_FILE.open("w", encoding="utf-8") as fp:
+            json.dump(payload, fp, ensure_ascii=False, indent=2)
+        return True, ""
+    except Exception as ex:
+        return False, str(ex)
+
+
+def _create_menu_naming_scheme(new_key, new_label, base_scheme):
+    normalized_key = str(new_key or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,31}", normalized_key):
+        return False, "方案标识需为 2-32 位小写字母/数字/下划线/中划线。", ""
+    normalized_label = str(new_label or "").strip()
+    if not normalized_label:
+        return False, "方案名称不能为空。", ""
+
+    payload = _load_menu_naming_schemes()
+    schemes = payload.get("schemes") if isinstance(payload, dict) else {}
+    if not isinstance(schemes, dict) or not schemes:
+        return False, "菜单命名配置缺失。", ""
+    if normalized_key in schemes:
+        return False, f"方案标识已存在：{normalized_key}", ""
+    base_key = str(base_scheme or "").strip()
+    if base_key not in schemes:
+        base_key = str(payload.get("default_scheme") or DEFAULT_MENU_NAMING_SCHEME).strip()
+    if base_key not in schemes:
+        base_key = next(iter(schemes.keys()))
+    base_payload = schemes.get(base_key) or {}
+    new_payload = json.loads(json.dumps(base_payload, ensure_ascii=False))
+    new_payload["label"] = normalized_label
+    schemes[normalized_key] = new_payload
+    payload["schemes"] = schemes
+    ok, error_message = _save_menu_naming_schemes(payload)
+    if not ok:
+        return False, f"保存失败：{error_message}", ""
+    return True, "", normalized_key
+
+
+def _set_menu_naming_scheme(request, scheme):
+    context = _build_menu_naming_context(request)
+    allowed = {item["value"] for item in context["menu_naming_options"]}
+    normalized = str(scheme or "").strip()
+    if normalized not in allowed:
+        normalized = context["menu_naming_default_scheme"]
+    request.session[MENU_NAMING_SCHEME_SESSION_KEY] = normalized
+    request.session.modified = True
+    return normalized
+
+
 def _parse_bool_flag(raw_value, default=True):
     text = str(raw_value or "").strip().lower()
     if not text:
@@ -3019,6 +3213,7 @@ def _build_chat_context(request, active_session=None, message_form=None, chat_se
                 inflight_reply_task = candidate
                 break
 
+    menu_naming_context = _build_menu_naming_context(request)
     return {
         "sessions": summary_sessions,
         "summary_sessions": summary_sessions,
@@ -3031,13 +3226,16 @@ def _build_chat_context(request, active_session=None, message_form=None, chat_se
         "projects": projects,
         "current_llm_name": current_llm_name,
         "rollback_draft": rollback_draft,
-        "control_modules": ALLOWED_CONTROL_MODULES,
+        "control_modules": menu_naming_context["menu_control_modules"],
         "control_active_module": None,
         "agent_modules": ALLOWED_AGENT_MODULES,
         "agent_active_module": None,
         "current_nav": "chat",
         "ui_theme": _get_ui_theme(request),
         "ui_theme_options": THEME_LABELS,
+        "menu_naming_scheme": menu_naming_context["menu_naming_scheme"],
+        "menu_naming_options": menu_naming_context["menu_naming_options"],
+        "menu_labels": menu_naming_context["menu_labels"],
         "permission_restriction_enabled": _get_permission_restriction_enabled(),
         "companion_final_step_watchdog_seconds": _get_companion_final_step_watchdog_seconds(),
         "enabled_companions": enabled_companion_items,
@@ -4471,6 +4669,10 @@ def _build_control_component_items(module_name: str, module_info):
                     "control_component_toggle_enabled",
                     kwargs={"module_name": module_name, "component_key": component_key},
                 ),
+                "delete_url": reverse(
+                    "control_component_delete",
+                    kwargs={"module_name": module_name, "component_key": component_key},
+                ),
             }
         )
     return result
@@ -5250,21 +5452,34 @@ def toolset_list(request):
                     messages.error(request, f"工具集不存在：{toolset_key}")
                 except Exception as exc:
                     messages.error(request, f"工具集状态更新失败：{exc}")
-            redirect_url = reverse("toolset_list")
-            query_args = {}
-            if keyword:
-                query_args["q"] = keyword
-            if selected_os:
-                query_args["os"] = selected_os
-            if selected_source:
-                query_args["source"] = selected_source
-            if search_engine:
-                query_args["search_engine"] = search_engine
-            if search_mode:
-                query_args["search_mode"] = search_mode
-            if query_args:
-                redirect_url = f"{redirect_url}?{urlencode(query_args)}"
-            return redirect(redirect_url)
+        elif action == "delete_toolset":
+            toolset_key = str(request.POST.get("toolset_key", "")).strip()
+            if not toolset_key:
+                messages.error(request, "缺少工具集标识。")
+            else:
+                try:
+                    delete_toolset(toolset_key)
+                    messages.success(request, f"工具集已删除：{toolset_key}")
+                    _refresh_capability_search_cache_if_needed()
+                except KeyError:
+                    messages.error(request, f"工具集不存在：{toolset_key}")
+                except Exception as exc:
+                    messages.error(request, f"工具集删除失败：{exc}")
+        redirect_url = reverse("toolset_list")
+        query_args = {}
+        if keyword:
+            query_args["q"] = keyword
+        if selected_os:
+            query_args["os"] = selected_os
+        if selected_source:
+            query_args["source"] = selected_source
+        if search_engine:
+            query_args["search_engine"] = search_engine
+        if search_mode:
+            query_args["search_mode"] = search_mode
+        if query_args:
+            redirect_url = f"{redirect_url}?{urlencode(query_args)}"
+        return redirect(redirect_url)
 
     return render(request, "collector/toolset_list.html", context)
 
@@ -5404,6 +5619,25 @@ def agent_item_upload(request, module_name):
 
     _refresh_capability_search_cache_if_needed()
     messages.success(request, f"智能体项 {item_dir_name} 导入完成。")
+    return redirect("agent_item_list", module_name=module_name)
+
+
+@login_required
+def agent_item_delete(request, module_name, item_name):
+    if module_name not in ALLOWED_AGENT_MODULES:
+        messages.error(request, "不支持的智能体模块。")
+        return redirect("session_list")
+    if request.method != "POST":
+        return redirect("agent_item_list", module_name=module_name)
+
+    try:
+        delete_agent_item_via_manager(module_name, item_name)
+        messages.success(request, f"智能体项已删除：{item_name}")
+        _refresh_capability_search_cache_if_needed()
+    except ValueError as exc:
+        messages.error(request, f"删除失败：{exc}")
+    except Exception as exc:
+        messages.error(request, f"智能体项删除失败：{exc}")
     return redirect("agent_item_list", module_name=module_name)
 
 
@@ -6134,6 +6368,35 @@ def control_function_upload(request, module_name):
 
 
 @login_required
+def control_component_delete(request, module_name, component_key):
+    if module_name not in ALLOWED_CONTROL_MODULES:
+        messages.error(request, "不支持的组件模块。")
+        return redirect("session_list")
+    if request.method != "POST":
+        return redirect("control_function_list", module_name=module_name)
+
+    module_info = _load_control_module_info(module_name)
+    try:
+        component_item, component_dir = _resolve_component_directory(module_name, component_key, module_info)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect("control_function_list", module_name=module_name)
+
+    if not component_dir.exists():
+        messages.error(request, "组件目录不存在。")
+        return redirect("control_function_list", module_name=module_name)
+
+    try:
+        shutil.rmtree(component_dir)
+        messages.success(request, f"组件已删除：{component_key}")
+        _refresh_capability_search_cache_if_needed()
+    except Exception as exc:
+        messages.error(request, f"组件删除失败：{exc}")
+
+    return redirect("control_function_list", module_name=module_name)
+
+
+@login_required
 def requirement_file_list(request):
     current_project = _get_current_project(request)
     entries = []
@@ -6786,6 +7049,25 @@ def session_rollback(request, session_id, message_id):
 
 
 @login_required
+def session_message_delete(request, session_id, message_id):
+    if request.method != "POST":
+        return redirect("session_detail", session_id=session_id)
+
+    session_obj = get_object_or_404(
+        RequirementSession.objects.filter(created_by=request.user),
+        id=session_id,
+    )
+    target_message = get_object_or_404(
+        RequirementMessage.objects.filter(session=session_obj),
+        id=message_id,
+    )
+    target_message.delete()
+    session_obj.save(update_fields=["updated_at"])
+    messages.success(request, "消息已删除。")
+    return _redirect_for_chat_session(session_obj)
+
+
+@login_required
 def session_delete(request, session_id):
     """删除会话"""
     session = get_object_or_404(
@@ -6996,12 +7278,32 @@ def system_settings(request):
 
     next_url = str(request.POST.get("next", "")).strip()
     has_theme = "ui_theme" in request.POST
+    has_menu_scheme = "menu_naming_scheme" in request.POST
+    has_menu_scheme_create = bool(str(request.POST.get("menu_naming_new_key", "")).strip())
     has_permission_switch = "permission_restriction_enabled" in request.POST
     has_companion_watchdog = "companion_final_step_watchdog_seconds" in request.POST
 
     if has_theme:
         selected = _set_ui_theme(request, request.POST.get("ui_theme", ""))
         messages.success(request, f"界面主题已更新为：{THEME_LABELS[selected]}")
+
+    if has_menu_scheme:
+        selected = _set_menu_naming_scheme(request, request.POST.get("menu_naming_scheme", ""))
+        menu_context = _build_menu_naming_context(request)
+        option_map = {item["value"]: item["label"] for item in menu_context["menu_naming_options"]}
+        messages.success(request, f"菜单命名方案已更新为：{option_map.get(selected, selected)}")
+
+    if has_menu_scheme_create:
+        ok, error_message, created_key = _create_menu_naming_scheme(
+            new_key=request.POST.get("menu_naming_new_key", ""),
+            new_label=request.POST.get("menu_naming_new_label", ""),
+            base_scheme=request.POST.get("menu_naming_copy_from", ""),
+        )
+        if ok and created_key:
+            _set_menu_naming_scheme(request, created_key)
+            messages.success(request, f"菜单命名方案已新建：{created_key}")
+        else:
+            messages.error(request, error_message or "菜单命名方案新建失败。")
 
     if has_permission_switch:
         enabled = _parse_bool_flag(request.POST.get("permission_restriction_enabled"), default=True)
@@ -7026,7 +7328,13 @@ def system_settings(request):
         else:
             messages.error(request, "最后一步看门狗设置保存失败，请先执行 migrate 后重试。")
 
-    if not has_theme and not has_permission_switch and not has_companion_watchdog:
+    if (
+        not has_theme
+        and not has_menu_scheme
+        and not has_menu_scheme_create
+        and not has_permission_switch
+        and not has_companion_watchdog
+    ):
         messages.error(request, "未检测到可更新的系统设置项。")
     if next_url and url_has_allowed_host_and_scheme(
         url=next_url,

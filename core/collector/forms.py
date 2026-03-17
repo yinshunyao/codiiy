@@ -48,6 +48,22 @@ class ProjectForm(forms.ModelForm):
 
 
 class CompanionProfileForm(forms.ModelForm):
+    adapter_type = forms.ChoiceField(
+        label="adapter 类型",
+        choices=[("", "不使用 adapter")],
+        required=False,
+        widget=forms.Select(attrs={"class": "form-mindforge", "id": "id_adapter_type"}),
+    )
+    adapter_config = forms.CharField(
+        label="adapter 配置（JSON）",
+        required=False,
+        widget=forms.Textarea(attrs={
+            "class": "form-mindforge",
+            "rows": 4,
+            "placeholder": '{"command": "echo", "args": ["hello"]}',
+            "id": "id_adapter_config",
+        }),
+    )
     allowed_agent_modules = forms.MultipleChoiceField(
         label="可调用智能体模块",
         choices=(),
@@ -55,7 +71,7 @@ class CompanionProfileForm(forms.ModelForm):
         widget=forms.CheckboxSelectMultiple,
     )
     allowed_control_modules = forms.MultipleChoiceField(
-        label="可调用工具组件模块",
+        label="可调用组件模块",
         choices=(),
         required=False,
         widget=forms.CheckboxSelectMultiple,
@@ -100,6 +116,8 @@ class CompanionProfileForm(forms.ModelForm):
             "persona",
             "tone",
             "memory_notes",
+            "adapter_type",
+            "adapter_config",
             "llm_routing_mode",
             "llm_source_type",
             "llm_api_config",
@@ -227,6 +245,18 @@ class CompanionProfileForm(forms.ModelForm):
         control_function_component_map = kwargs.pop("control_function_component_map", {})
         user = kwargs.pop("user", None)
         super().__init__(*args, **kwargs)
+
+        from adapter.registry import adapter_registry
+        self.fields["adapter_type"].choices = adapter_registry.get_adapter_choices()
+        if not self.is_bound and self.instance and self.instance.pk:
+            self.initial["adapter_type"] = self.instance.adapter_type or ""
+            adapter_config_val = self.instance.adapter_config
+            if isinstance(adapter_config_val, dict) and adapter_config_val:
+                import json as _json
+                self.initial["adapter_config"] = _json.dumps(adapter_config_val, ensure_ascii=False, indent=2)
+            else:
+                self.initial["adapter_config"] = ""
+
         self.fields["allowed_agent_modules"].choices = agent_module_choices
         self.fields["allowed_control_modules"].choices = control_module_choices
         self.fields["allowed_toolsets"].choices = toolset_choices
@@ -347,6 +377,23 @@ class CompanionProfileForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
+
+        adapter_type_val = str(cleaned_data.get("adapter_type") or "").strip()
+        adapter_config_raw = str(cleaned_data.get("adapter_config") or "").strip()
+        if adapter_config_raw:
+            import json as _json
+            try:
+                parsed = _json.loads(adapter_config_raw)
+                if not isinstance(parsed, dict):
+                    self.add_error("adapter_config", "adapter 配置必须是 JSON 对象。")
+                else:
+                    cleaned_data["adapter_config"] = parsed
+            except _json.JSONDecodeError as exc:
+                self.add_error("adapter_config", f"JSON 格式错误: {exc}")
+        else:
+            cleaned_data["adapter_config"] = {}
+        cleaned_data["adapter_type"] = adapter_type_val
+
         routing_mode = self._resolve_routing_mode(cleaned_data.get("llm_routing_mode"))
         source = self._resolve_source_value(cleaned_data.get("llm_source_type"))
         binding_key = str(cleaned_data.get("model_binding_key") or "").strip()
@@ -432,6 +479,9 @@ class CompanionProfileForm(forms.ModelForm):
 
     def save(self, commit=True):
         instance = super().save(commit=False)
+        instance.adapter_type = str(self.cleaned_data.get("adapter_type") or "").strip()
+        adapter_config_val = self.cleaned_data.get("adapter_config")
+        instance.adapter_config = adapter_config_val if isinstance(adapter_config_val, dict) else {}
         instance.allowed_agent_modules_text = ",".join(self.cleaned_data.get("allowed_agent_modules", []))
         instance.allowed_control_modules_text = ",".join(self.cleaned_data.get("allowed_control_modules", []))
         instance.allowed_toolsets_text = ",".join(self.cleaned_data.get("allowed_toolsets", []))

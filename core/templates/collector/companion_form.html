@@ -172,6 +172,23 @@
                             {{ companion_form.memory_notes }}
                             {% if companion_form.memory_notes.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.memory_notes.errors|join:"；" }}</div>{% endif %}
                         </div>
+                        <div class="companion-field-group companion-field-full">
+                            <label style="font-size: 14px; font-weight: 600; margin-bottom: 10px;">外部 Agent 对接（Adapter）</label>
+                            <div class="companion-form-grid" style="border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--panel-2);">
+                                <div class="companion-field-group">
+                                    <label for="{{ companion_form.adapter_type.id_for_label }}">adapter 类型</label>
+                                    {{ companion_form.adapter_type }}
+                                    <div class="meta" id="adapter-type-hint" style="margin-top: 4px;">选择后可配置对应的 adapter 参数。</div>
+                                    {% if companion_form.adapter_type.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.adapter_type.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                                <div class="companion-field-group" id="adapter-config-group">
+                                    <label for="{{ companion_form.adapter_config.id_for_label }}">adapter 配置（JSON）</label>
+                                    {{ companion_form.adapter_config }}
+                                    <div class="meta" id="adapter-config-hint" style="margin-top: 4px;">JSON 格式，字段随 adapter 类型而异。</div>
+                                    {% if companion_form.adapter_config.errors %}<div class="meta" style="color: #ff8f8f;">{{ companion_form.adapter_config.errors|join:"；" }}</div>{% endif %}
+                                </div>
+                            </div>
+                        </div>
                         {{ companion_form.llm_api_config }}
                         {{ companion_form.local_llm_config }}
                         <div class="companion-field-group companion-field-full">
@@ -494,6 +511,39 @@
         bindingSelect.addEventListener("change", sync);
         defaultModelSelect.addEventListener("change", syncBackupModelState);
         sync();
+    })();
+
+    (function bindAdapterTypeToggle() {
+        var adapterTypeSelect = document.getElementById("id_adapter_type");
+        var adapterConfigGroup = document.getElementById("adapter-config-group");
+        var adapterConfigHint = document.getElementById("adapter-config-hint");
+        var adapterTypeHint = document.getElementById("adapter-type-hint");
+        if (!adapterTypeSelect || !adapterConfigGroup) {
+            return;
+        }
+        var configSchemas = {
+            "process": 'process 配置示例：{"command": "echo", "args": ["hello"], "cwd": "/tmp", "timeout_sec": 60}',
+            "http": 'http 配置示例：{"url": "http://localhost:8000/api/run", "method": "POST", "timeout_sec": 30}'
+        };
+        var syncAdapterUI = function () {
+            var selectedType = adapterTypeSelect.value || "";
+            if (!selectedType) {
+                adapterConfigGroup.style.display = "none";
+                if (adapterTypeHint) {
+                    adapterTypeHint.textContent = "不使用外部 adapter，伙伴将使用内置 LLM 对话。";
+                }
+            } else {
+                adapterConfigGroup.style.display = "";
+                if (adapterTypeHint) {
+                    adapterTypeHint.textContent = "已选择 " + selectedType + " adapter。";
+                }
+                if (adapterConfigHint) {
+                    adapterConfigHint.textContent = configSchemas[selectedType] || "请参照 adapter 文档填写 JSON 配置。";
+                }
+            }
+        };
+        adapterTypeSelect.addEventListener("change", syncAdapterUI);
+        syncAdapterUI();
     })();
 
     {% include "collector/partials/sidebar_menu_script.html" %}

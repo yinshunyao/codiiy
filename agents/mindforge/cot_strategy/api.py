@@ -1,7 +1,7 @@
 import json
 from typing import Any, Dict, List, Tuple
 
-from tools.mindforge_toolset import MindforgeToolset
+from framework import CapabilityDispatcher
 
 from ..strategy_base import MindforgeStrategy
 from ..react_strategy.models import ReActEngineConfig, ReActRunResult, ReActStepRecord, ReActTool
@@ -15,7 +15,7 @@ class CoTMindforgeStrategy(MindforgeStrategy):
     requires_tools = False
 
     def __init__(self):
-        self.component_tool = MindforgeToolset(auto_install=False)
+        self.component_tool = CapabilityDispatcher(auto_install=False)
 
     def run(
         self,
@@ -89,7 +89,7 @@ class CoTMindforgeStrategy(MindforgeStrategy):
                 input_data={"model": config.model},
                 error=str(exc),
             )
-            return "", f"调用 tools.mindforge_toolset.chat_completion 失败: {exc}", {}
+            return "", f"调用 capability_dispatcher.chat_completion 失败: {exc}", {}
 
         if not isinstance(call_result, dict) or not bool(call_result.get("success")):
             call_error = str(call_result.get("error", "调用 component_tool 失败"))

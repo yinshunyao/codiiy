@@ -22,6 +22,29 @@
     .toolset-item {
         margin-bottom: 12px;
     }
+    .toolset-item-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+    }
+    .toolset-item-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        white-space: nowrap;
+    }
+    .toolset-meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        margin-top: 6px;
+    }
+    .toolset-meta-item {
+        color: var(--muted-text-color, #666);
+        font-size: 13px;
+        line-height: 1.4;
+    }
     .toolset-os-select {
         height: 36px;
     }
@@ -81,29 +104,46 @@
             {% if toolset_items %}
                 {% for item in toolset_items %}
                 <div class="panel toolset-item">
-                    <div><strong>{{ item.name }}</strong></div>
-                    <div class="meta">目录：{{ item.directory }}</div>
-                    <div class="meta">README：{% if item.readme_exists %}已存在{% else %}缺失{% endif %}</div>
-                    <div class="meta">更新时间：{{ item.updated_at|date:"Y-m-d H:i" }}</div>
-                    <div class="meta">状态：{% if item.enabled %}已启用{% else %}已停用{% endif %}</div>
-                    <div class="meta">工具源：{{ item.source_text }}</div>
-                    <div class="meta">支持系统：{{ item.os_support_text }}</div>
-                    <div class="meta">摘要：{{ item.summary }}</div>
-                    {% if item.search_score %}
-                    <div class="meta">检索得分：{{ item.search_score|floatformat:4 }}</div>
-                    {% endif %}
-                    <form method="post" action="{% url 'toolset_list' %}" style="margin-top: 8px;">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="toggle_toolset_enabled">
-                        <input type="hidden" name="toolset_key" value="{{ item.name }}">
-                        <input type="hidden" name="target_action" value="{% if item.enabled %}disable{% else %}enable{% endif %}">
-                        <input type="hidden" name="q" value="{{ toolset_keyword }}">
-                        <input type="hidden" name="os" value="{{ toolset_os }}">
-                        <input type="hidden" name="source" value="{{ toolset_source }}">
-                        <input type="hidden" name="search_engine" value="{{ search_engine }}">
-                        <input type="hidden" name="search_mode" value="{{ search_mode }}">
-                        <button type="submit">{% if item.enabled %}停用{% else %}启用{% endif %}</button>
-                    </form>
+                    <div class="toolset-item-header">
+                        <div><strong>{{ item.name }}</strong></div>
+                        <div class="toolset-item-actions">
+                        <form method="post" action="{% url 'toolset_list' %}" style="margin: 0;">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="toggle_toolset_enabled">
+                            <input type="hidden" name="toolset_key" value="{{ item.name }}">
+                            <input type="hidden" name="target_action" value="{% if item.enabled %}disable{% else %}enable{% endif %}">
+                            <input type="hidden" name="q" value="{{ toolset_keyword }}">
+                            <input type="hidden" name="os" value="{{ toolset_os }}">
+                            <input type="hidden" name="source" value="{{ toolset_source }}">
+                            <input type="hidden" name="search_engine" value="{{ search_engine }}">
+                            <input type="hidden" name="search_mode" value="{{ search_mode }}">
+                            <button type="submit">{% if item.enabled %}停用{% else %}启用{% endif %}</button>
+                        </form>
+                        <form method="post" action="{% url 'toolset_list' %}" style="margin: 0;" onsubmit="return confirm('确定要删除工具集「{{ item.name }}」吗？此操作不可恢复。');">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="delete_toolset">
+                            <input type="hidden" name="toolset_key" value="{{ item.name }}">
+                            <input type="hidden" name="q" value="{{ toolset_keyword }}">
+                            <input type="hidden" name="os" value="{{ toolset_os }}">
+                            <input type="hidden" name="source" value="{{ toolset_source }}">
+                            <input type="hidden" name="search_engine" value="{{ search_engine }}">
+                            <input type="hidden" name="search_mode" value="{{ search_mode }}">
+                            <button type="submit" style="color: var(--error, #e74c3c);">删除</button>
+                        </form>
+                        </div>
+                    </div>
+                    <div class="toolset-meta-row">
+                        <div class="toolset-meta-item">目录：{{ item.directory }}</div>
+                        <div class="toolset-meta-item">README：{% if item.readme_exists %}已存在{% else %}缺失{% endif %}</div>
+                        <div class="toolset-meta-item">更新时间：{{ item.updated_at|date:"Y-m-d H:i" }}</div>
+                        <div class="toolset-meta-item">状态：{% if item.enabled %}已启用{% else %}已停用{% endif %}</div>
+                        <div class="toolset-meta-item">工具源：{{ item.source_text }}</div>
+                        <div class="toolset-meta-item">支持系统：{{ item.os_support_text }}</div>
+                        {% if item.search_score %}
+                        <div class="toolset-meta-item">检索得分：{{ item.search_score|floatformat:4 }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="meta" style="margin-top: 4px;">摘要：{{ item.summary }}</div>
                     <div style="margin-top: 8px;">
                         <div class="meta">Python 文件：</div>
                         {% if item.python_files %}

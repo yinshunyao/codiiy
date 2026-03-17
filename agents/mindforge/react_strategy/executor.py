@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from tools.mindforge_toolset import MindforgeToolset
+from framework import CapabilityDispatcher
 
 from .models import ReActTool
 from .protocol import safe_json_dumps
@@ -12,7 +12,7 @@ class ReActToolExecutor:
     def __init__(self, tools: List[ReActTool]):
         self.tool_map = self.build_tool_map(tools)
         self.tool_alias_map = self.build_tool_alias_map(self.tool_map)
-        self.component_tool = MindforgeToolset(auto_install=False)
+        self.component_tool = CapabilityDispatcher(auto_install=False)
 
     @staticmethod
     def build_tool_map(tools: List[ReActTool]) -> Dict[str, ReActTool]:

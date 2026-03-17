@@ -1,7 +1,0 @@
-Django>=5.0,<6.0
-dashscope
-zvec
-numpy
-llama-cpp-python
-markdown
-bleach

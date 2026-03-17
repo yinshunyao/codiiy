@@ -8,7 +8,6 @@ from .protocol import (
     ExecutionPlan,
     PlanStep,
     STEP_TYPE_AGENT,
-    STEP_TYPE_COMMAND,
     STEP_TYPE_SUMMARIZE,
     STEP_TYPE_TOOL,
 )
@@ -278,18 +277,14 @@ class CustomPlanner:
             if not isinstance(raw, dict):
                 continue
             step_type = str(raw.get("step_type") or "").strip()
-            if step_type not in {STEP_TYPE_AGENT, STEP_TYPE_COMMAND, STEP_TYPE_TOOL, STEP_TYPE_SUMMARIZE}:
+            if step_type not in {STEP_TYPE_AGENT, STEP_TYPE_TOOL, STEP_TYPE_SUMMARIZE}:
                 continue
-            # summarize 统一由规划器补齐到末尾，避免中间位置导致执行语义混乱。
             if step_type == STEP_TYPE_SUMMARIZE:
                 continue
 
             target = str(raw.get("target") or "").strip()
             if step_type == STEP_TYPE_AGENT:
                 if target != "mindforge" or target not in allowed_agents:
-                    continue
-            elif step_type == STEP_TYPE_COMMAND:
-                if target != "helm" or target not in allowed_agents:
                     continue
             elif step_type == STEP_TYPE_TOOL:
                 if not target.startswith("tools."):
@@ -375,7 +370,6 @@ class CustomPlanner:
         steps: List[PlanStep] = []
 
         allow_mindforge = "mindforge" in set(allowed_agent_modules or [])
-        allow_helm = "helm" in set(allowed_agent_modules or [])
         lightweight_with_tools = bool(candidate_tools) and self._is_lightweight_direct_query(query)
 
         if allow_mindforge and not lightweight_with_tools and len(steps) < max(0, max_plan_steps - 1):
@@ -384,17 +378,6 @@ class CustomPlanner:
                     step_id="step_agent_mindforge",
                     step_type=STEP_TYPE_AGENT,
                     target="mindforge",
-                    input={"query": query},
-                    depends_on=[],
-                )
-            )
-
-        if allow_helm and self._should_run_helm_step(query) and len(steps) < max(0, max_plan_steps - 1):
-            steps.append(
-                PlanStep(
-                    step_id="step_command_helm",
-                    step_type=STEP_TYPE_COMMAND,
-                    target="helm",
                     input={"query": query},
                     depends_on=[],
                 )
@@ -456,9 +439,7 @@ class CustomPlanner:
 
         filtered_steps: List[PlanStep] = []
         for item in non_summarize_steps:
-            if item.step_type == STEP_TYPE_COMMAND and not self._should_run_helm_step(query):
-                continue
-            if lightweight_with_tools and item.step_type in {STEP_TYPE_AGENT, STEP_TYPE_COMMAND}:
+            if lightweight_with_tools and item.step_type == STEP_TYPE_AGENT:
                 continue
             filtered_steps.append(item)
 
@@ -483,25 +464,6 @@ class CustomPlanner:
 
         plan.steps = filtered_steps + [summarize_step]
         return plan
-
-    @staticmethod
-    def _should_run_helm_step(query: str) -> bool:
-        text = str(query or "").strip().lower()
-        if not text:
-            return False
-        markers = [
-            "整理需求",
-            "原始需求",
-            "需求整理",
-            "需求归纳",
-            "进入整理",
-            "完成整理",
-            "确认完成",
-            "收集完成",
-            "生成需求文档",
-            "提炼需求",
-        ]
-        return any(marker in text for marker in markers)
 
     @staticmethod
     def _is_lightweight_direct_query(query: str) -> bool:
@@ -666,7 +628,7 @@ class CustomPlanner:
             '  "steps": [\n'
             "    {\n"
             '      "step_id": "字符串(可选)",\n'
-            '      "step_type": "agent|command|tool|summarize",\n'
+            '      "step_type": "agent|tool|summarize",\n'
             '      "target": "目标标识",\n'
             '      "input": {"query": "..."},\n'
             '      "depends_on": ["step_xxx"]\n'
@@ -677,10 +639,9 @@ class CustomPlanner:
             f"1) 步骤数量上限为 {max_plan_steps}；\n"
             "2) 必须至少有一个 summarize 步骤；\n"
             "3) step_type=agent 仅允许 target=mindforge；\n"
-            "4) step_type=command 仅允许 target=helm；\n"
-            "5) step_type=tool 的 target 必须来自候选工具列表；\n"
-            "6) 依赖只允许引用已出现步骤，不允许环；\n"
-            "7) input 中尽量保留 query 字段。\n\n"
+            "4) step_type=tool 的 target 必须来自候选工具列表；\n"
+            "5) 依赖只允许引用已出现步骤，不允许环；\n"
+            "6) input 中尽量保留 query 字段。\n\n"
             f"用户任务：{query}\n"
             f"可用 agent 模块：{json.dumps(list(allowed_agent_modules or []), ensure_ascii=False)}\n"
             f"可用 tool 模块：{json.dumps(list(allowed_control_modules or []), ensure_ascii=False)}\n"

@@ -4,7 +4,7 @@ import logging
 from agents.mindforge.react_strategy import ReActEngineConfig, ReActTool
 from agents.mindforge.strategy_base import MindforgeStopRequested
 from agents.mindforge.strategy_factory import build_mindforge_strategy
-from tools.mindforge_toolset import MindforgeToolset
+from framework import CapabilityDispatcher
 
 from .capability_search import search_tool_functions
 from .protocol import OrchestrationStoppedError, STEP_STATUS_FAILED, STEP_STATUS_SUCCESS
@@ -16,8 +16,8 @@ class MindforgeRunner:
     """心法执行器：封装策略路由与运行上下文。"""
 
     def __init__(self):
-        # 保留工具集代理实例，供后续策略扩展复用。
-        self.tool_proxy = MindforgeToolset(auto_install=False)
+        # 能力调度器实例，供后续策略扩展复用。
+        self.tool_proxy = CapabilityDispatcher(auto_install=False)
 
     def run(
         self,

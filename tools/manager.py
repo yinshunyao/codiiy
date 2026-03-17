@@ -1,5 +1,6 @@
 import json
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -305,6 +306,24 @@ def set_toolset_enabled(toolset_key: str, enabled: bool) -> Dict[str, Any]:
     state[toolset_key] = bool(enabled)
     _save_state(state)
     return {"toolset_key": toolset_key, "enabled": bool(enabled)}
+
+
+def delete_toolset(toolset_key: str) -> Dict[str, Any]:
+    toolset_path = _get_toolset_path(toolset_key)
+    if not toolset_path:
+        raise KeyError(f"工具集不存在: {toolset_key}")
+
+    shutil.rmtree(toolset_path)
+
+    state = _load_state()
+    state.pop(toolset_key, None)
+    _save_state(state)
+
+    source_state = _load_source_state()
+    source_state.pop(toolset_key, None)
+    _save_source_state(source_state)
+
+    return {"toolset_key": toolset_key, "deleted": True}
 
 
 def list_toolsets(

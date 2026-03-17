@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Dict, List, Tuple
 
-from tools.mindforge_toolset import MindforgeToolset
+from framework import CapabilityDispatcher
 from tools.manager import get_toolset_key_by_module
 
 from .protocol import STEP_STATUS_FAILED, STEP_STATUS_SUCCESS
@@ -27,7 +27,7 @@ class ToolRunner:
     }
 
     def __init__(self):
-        self.tool_proxy = MindforgeToolset(auto_install=False)
+        self.tool_proxy = CapabilityDispatcher(auto_install=False)
 
     def run(
         self,

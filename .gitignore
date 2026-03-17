@@ -11,3 +11,4 @@ __pycache__
 /.idea/.gitignore
 /.idea/codiiy.iml
 /core/.cursor-cli/sessions.db
+/run.local

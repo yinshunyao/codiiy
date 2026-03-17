@@ -62,22 +62,49 @@ print(result)
 
 ## API
 
-### `ensure_dependencies(function_path)`
-- 根据 `function_path` 映射到组件目录，检查并安装该组件 `requirements.txt` 中缺失依赖。
+### `ensure_dependencies(function_path: str) -> Dict`
 
-### `control_info()`
-- 查询 `component` 全量模块信息与函数清单（基于各目录 `README.json`）。
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `function_path` | `str` | 必填 | 组件函数全路径，必须以 `component.` 开头。 |
 
-### `control_call(function_path, kwargs=None)`
-- 通过字符串路径调用 `component` 下函数，调用前自动执行依赖检查。
-- 调用前按组件声明检查必需系统权限；若缺失权限确认则返回 `success=False` 与 `missing_permissions`。
-- 若 `kwargs` 中存在目标函数未声明的参数，工具会自动过滤并记录 warning 日志。
+返回 `data` 字段：`checked_component`、`installed_dependencies`、`missing_dependencies`（按实现返回）。
 
-### `get_component_enabled(component_key)`
-- 查询指定组件当前是否启用。
+### `control_info() -> Dict`
 
-### `set_component_enabled(component_key, enabled)`
-- 设置指定组件启停状态并持久化。
+无参数。
+
+返回 `data` 字段：组件清单及函数元信息（来自 `component/**/README.json` 聚合结果）。
+
+### `control_call(function_path: str, kwargs: Optional[Dict] = None) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `function_path` | `str` | 必填 | 目标组件函数路径，如 `component.observe.understand_current_screen`。 |
+| `kwargs` | `Optional[Dict]` | `None` | 传递给目标函数的关键字参数。 |
+
+返回 `data` 字段：目标函数原始返回结果；当权限不足时，失败结果中包含 `missing_permissions`。
+
+### `get_component_enabled(component_key: str) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `component_key` | `str` | 必填 | 组件 key（通常是组件目录名）。 |
+
+返回 `data` 字段：`component_key`、`enabled`。
+
+### `set_component_enabled(component_key: str, enabled: bool) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `component_key` | `str` | 必填 | 组件 key（通常是组件目录名）。 |
+| `enabled` | `bool` | 必填 | 是否启用该组件。 |
+
+返回 `data` 字段：`component_key`、`enabled`、`updated`（按实现返回）。
+
+### `call_control_function(function_path: str, kwargs: Optional[Dict] = None) -> Dict`
+
+兼容旧方法名，参数与 `control_call` 完全一致。
 
 ## 注意事项
 

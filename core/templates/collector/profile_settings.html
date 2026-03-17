@@ -101,6 +101,49 @@
                 </div>
 
                 <div class="panel settings-card">
+                    <h2 style="margin-top: 0;">菜单命名方案</h2>
+                    <div class="meta" style="margin-top: 4px;">
+                        当前方案：
+                        {% for item in menu_naming_options %}
+                            {% if item.value == menu_naming_scheme %}{{ item.label }}{% endif %}
+                        {% endfor %}
+                    </div>
+                    <form method="post" action="{% url 'system_settings' %}" style="margin-top: 14px;">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{% url 'profile_settings' %}">
+                        <label for="menuNamingScheme">命名风格</label>
+                        <select id="menuNamingScheme" name="menu_naming_scheme" style="max-width: 280px; margin-top: 8px;">
+                            {% for item in menu_naming_options %}
+                            <option value="{{ item.value }}" {% if item.value == menu_naming_scheme %}selected{% endif %}>{{ item.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="meta" style="margin-top: 8px;">切换后左侧菜单立即更新。</div>
+                        <div style="margin-top: 12px;">
+                            <button type="submit" class="ghost-btn">保存命名方案</button>
+                        </div>
+                    </form>
+                    <form method="post" action="{% url 'system_settings' %}" style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line);">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{% url 'profile_settings' %}">
+                        <div class="meta" style="margin-bottom: 8px;">新建方案（从已有方案复制）</div>
+                        <label for="menuNamingNewKey">方案标识（英文）</label>
+                        <input id="menuNamingNewKey" name="menu_naming_new_key" type="text" class="form-mindforge" placeholder="例如 wuxia-lite" style="margin-top: 8px;">
+                        <label for="menuNamingNewLabel" style="margin-top: 10px;">方案名称</label>
+                        <input id="menuNamingNewLabel" name="menu_naming_new_label" type="text" class="form-mindforge" placeholder="例如 武侠轻量版" style="margin-top: 8px;">
+                        <label for="menuNamingCopyFrom" style="margin-top: 10px;">复制自</label>
+                        <select id="menuNamingCopyFrom" name="menu_naming_copy_from" style="max-width: 280px; margin-top: 8px;">
+                            {% for item in menu_naming_options %}
+                            <option value="{{ item.value }}" {% if item.value == menu_naming_scheme %}selected{% endif %}>{{ item.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="meta" style="margin-top: 8px;">新建后自动切换到新方案，可再编辑配置文件细化文案。</div>
+                        <div style="margin-top: 12px;">
+                            <button type="submit" class="ghost-btn">新建并切换</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="panel settings-card">
                     <h2 style="margin-top: 0;">权限限制</h2>
                     <div class="meta" style="margin-top: 4px;">
                         当前状态：

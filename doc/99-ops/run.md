@@ -5,11 +5,11 @@
 2. 操作系统：macOS / Linux / Windows（命令示例以 macOS/Linux 为主）
 
 ## 2. 安装依赖
-在项目目录 `core` 下执行：
+在项目目录（仓库根目录）下执行：
 
 ```bash
 python3 -m venv .venv
-python3 -m pip install --user -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ## 3. 初始化数据库
@@ -54,8 +54,8 @@ export CODIIY_PROJECT_ROOT=/absolute/path/to/project_root
 在 `core` 下使用 `manage.sh`，脚本会自动完成以下动作：
 1. 检查 `python3`
 2. 不存在 `.venv` 时自动创建虚拟环境
-3. 依据 `requirements.txt` 哈希自动判断是否需要安装依赖（安装到系统 Python 用户目录）
-4. 使用系统 `python3` 启动 `manage.py`（不依赖激活虚拟环境）
+3. 依据 `requirements.txt` 哈希自动判断是否需要安装依赖（安装到 `.venv`）
+4. 使用 `.venv/bin/python` 启动 `manage.py`（不依赖手动激活虚拟环境）
 
 首次执行前先赋予可执行权限：
 
@@ -117,8 +117,10 @@ export QWEN_API_KEY=你的key
 
 ## 7. 常见问题
 1. 提示 `No module named django`
-- 先执行 `./manage.sh --reinstall` 让脚本重建依赖，或手动执行 `python3 -m pip install --user -r requirements.txt`
-2. 默认管理员无法登录
+- 先执行 `./manage.sh --reinstall` 让脚本重建依赖，或手动执行 `.venv/bin/python -m pip install -r requirements.txt`
+2. 安装依赖时提示 `No matching distribution found for zvec`
+- `zvec` 属于可选增强依赖，不影响基础启动；基础依赖默认不安装 `zvec`，直接执行 `./manage.sh` 即可
+3. 默认管理员无法登录
 - 确认是否首次迁移前已存在用户；如已存在用户，初始化逻辑不会重复创建默认 admin
 
 ## 8. 本地屏幕理解组件（control/observe）

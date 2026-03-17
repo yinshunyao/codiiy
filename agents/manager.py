@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -8,7 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 AGENT_MODULE_LABELS: Dict[str, str] = {
     "mindforge": "心法",
-    "helm": "号令",
     "skills": "技能",
 }
 
@@ -212,6 +212,14 @@ def resolve_agent_item_dir(module_name: str, item_name: str) -> Tuple[str, Optio
     if not target_dir.exists() or not target_dir.is_dir():
         return normalized, None, "智能体项目录不存在。"
     return normalized, target_dir, ""
+
+
+def delete_agent_item(module_name: str, item_name: str) -> Dict[str, Any]:
+    normalized, target_dir, error = resolve_agent_item_dir(module_name, item_name)
+    if error:
+        raise ValueError(error)
+    shutil.rmtree(target_dir)
+    return {"module_name": module_name, "item_name": normalized, "deleted": True}
 
 
 def assert_agent_enabled(module_path: str) -> str:

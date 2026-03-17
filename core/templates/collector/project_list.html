@@ -29,16 +29,6 @@
 
         <section class="conversation">
             <div class="chat-track">
-                {% if messages %}
-                <div class="panel" style="margin-bottom: 16px;">
-                    {% for message in messages %}
-                    <div style="color: {% if message.tags == 'error' %}#ff6b6b{% else %}#51cf66{% endif %}; margin: 4px 0;">
-                        {{ message }}
-                    </div>
-                    {% endfor %}
-                </div>
-                {% endif %}
-
                 <div class="panel">
                     <h2 style="margin-top: 0;">我的项目</h2>
 

@@ -21,16 +21,100 @@
 - 统一返回：
   - 成功：`{"success": True, "data": {...}}`
   - 失败：`{"success": False, "error": "错误信息"}`
-- 关键 API：
-  - `create_cursor_cli_session(cwd="", shell_mode="zsh", cursor_binary="cursor", check_available=True)`
-  - `check_cursor_available(object_id, timeout_seconds=10.0)`
-  - `call_cursor(object_id, args="", command="", timeout_seconds=120.0, read_incremental_output=False)`（`command` 为兼容别名，内部等价映射到 `args`）
-  - `call_cursor_with_prompt(object_id, prompt, args="", timeout_seconds=120.0, read_incremental_output=False)`
-  - `call_cursor_agent(object_id, prompt, model="", mode="", session_id="", workspace="", output_format="stream-json", extra_args="", timeout_seconds=180.0, read_incremental_output=False)`
-  - `parse_stream_json_output(output_text)`
-  - `get_cursor_session_id(object_id)`
-  - `close_cursor_cli_session(object_id)`
-  - `list_cursor_cli_sessions()`
+
+## API
+
+### `create_cursor_cli_session(cwd: str = "", shell_mode: str = "zsh", cursor_binary: str = "cursor", check_available: bool = True, check_timeout_seconds: float = 10.0) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `cwd` | `str` | `""` | 会话初始工作目录。 |
+| `shell_mode` | `str` | `"zsh"` | Shell 类型。 |
+| `cursor_binary` | `str` | `"cursor"` | Cursor CLI 可执行文件名或路径。 |
+| `check_available` | `bool` | `True` | 创建后是否立即检测 `cursor` 可用性。 |
+| `check_timeout_seconds` | `float` | `10.0` | 可用性检测超时时间。 |
+
+返回 `data` 字段：`object_id`、`cursor_binary`、`available`（按实现返回）。
+
+### `check_cursor_available(object_id: str, timeout_seconds: float = 10.0) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `object_id` | `str` | 必填 | CLI 会话对应的终端对象 ID。 |
+| `timeout_seconds` | `float` | `10.0` | 检测命令超时时间。 |
+
+返回 `data` 字段：`available`、`version_output`（按实现返回）。
+
+### `call_cursor(object_id: str, args: str = "", command: str = "", timeout_seconds: float = 120.0, read_incremental_output: bool = False) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `object_id` | `str` | 必填 | CLI 会话对象 ID。 |
+| `args` | `str` | `""` | 传给 `cursor` 的参数字符串。 |
+| `command` | `str` | `""` | `args` 的兼容别名。 |
+| `timeout_seconds` | `float` | `120.0` | 命令执行超时时间。 |
+| `read_incremental_output` | `bool` | `False` | 是否增量读取输出。 |
+
+返回 `data` 字段：`output`、`exit_code`、`command`（按实现返回）。
+
+### `call_cursor_with_prompt(object_id: str, prompt: str, args: str = "", timeout_seconds: float = 120.0, read_incremental_output: bool = False) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `object_id` | `str` | 必填 | CLI 会话对象 ID。 |
+| `prompt` | `str` | 必填 | Prompt 文本。 |
+| `args` | `str` | `""` | 附加参数，如 `--format text`。 |
+| `timeout_seconds` | `float` | `120.0` | 命令执行超时时间。 |
+| `read_incremental_output` | `bool` | `False` | 是否增量读取输出。 |
+
+返回 `data` 字段：`output`、`exit_code`、`command`（按实现返回）。
+
+### `call_cursor_agent(object_id: str = "", prompt: str = "", model: str = "", mode: str = "", session_id: str = "", workspace: str = "", output_format: str = "stream-json", extra_args: str = "", timeout_seconds: float = 180.0, read_incremental_output: bool = False) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `object_id` | `str` | `""` | 会话对象 ID，空值时自动创建会话。 |
+| `prompt` | `str` | `""` | Agent 提示词。 |
+| `model` | `str` | `""` | 指定模型，空值走默认。 |
+| `mode` | `str` | `""` | 对话模式，如 `ask`/`plan`。 |
+| `session_id` | `str` | `""` | 续接已有会话 ID。 |
+| `workspace` | `str` | `""` | 指定工作区路径。 |
+| `output_format` | `str` | `"stream-json"` | 输出格式。 |
+| `extra_args` | `str` | `""` | 额外 CLI 参数。 |
+| `timeout_seconds` | `float` | `180.0` | 调用超时时间。 |
+| `read_incremental_output` | `bool` | `False` | 是否增量读取输出。 |
+
+返回 `data` 字段：`output`、`parsed`（包含 `session_id`、`usage`、`cost_usd`、`summary`、`error`）、`actual_object_id`、`auto_created_session`（按实现返回）。
+
+### `parse_stream_json_output(output_text: str) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `output_text` | `str` | 必填 | `stream-json/jsonl` 原始输出。 |
+
+返回 `data` 字段：`session_id`、`usage`、`cost_usd`、`summary`、`error`（按可解析结果返回）。
+
+### `get_cursor_session_id(object_id: str) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `object_id` | `str` | 必填 | CLI 会话对象 ID。 |
+
+返回 `data` 字段：`session_id`。
+
+### `close_cursor_cli_session(object_id: str) -> Dict`
+
+| 参数 | 类型 | 默认值 | 说明 |
+|:---|:---|:---|:---|
+| `object_id` | `str` | 必填 | 待关闭的 CLI 会话对象 ID。 |
+
+返回 `data` 字段：`object_id`、`closed`（按实现返回）。
+
+### `list_cursor_cli_sessions() -> Dict`
+
+无参数。
+
+返回 `data` 字段：`objects`（Cursor CLI 会话列表）。
 
 ## 依赖组件
 

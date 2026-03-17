@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from tools.mindforge_toolset import MindforgeToolset
+from framework import CapabilityDispatcher
 
 from ..react_strategy.engine import ReActEngine
 from ..react_strategy.models import ReActEngineConfig, ReActRunResult, ReActStepRecord, ReActTool
@@ -37,7 +37,7 @@ class ReflexionMindforgeStrategy(MindforgeStrategy):
     requires_tools = True
 
     def __init__(self):
-        self.component_tool = MindforgeToolset(auto_install=False)
+        self.component_tool = CapabilityDispatcher(auto_install=False)
 
     def run(
         self,

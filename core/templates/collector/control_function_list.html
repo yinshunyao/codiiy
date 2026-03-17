@@ -168,6 +168,12 @@
                             {% if group.component.download_url %}
                             <a class="chip" href="{{ group.component.download_url }}">下载组件</a>
                             {% endif %}
+                            {% if group.component.delete_url %}
+                            <form method="post" action="{{ group.component.delete_url }}" class="component-action-form" onsubmit="return confirm('确定要删除组件「{{ group.component.component_name|default:group.component.component_key }}」吗？此操作不可恢复。');">
+                                {% csrf_token %}
+                                <button type="submit" class="chip component-chip-btn" style="color: var(--error, #e74c3c);">删除</button>
+                            </form>
+                            {% endif %}
                             <span class="chip" data-toggle-text>展开 API</span>
                         </div>
                     </div>

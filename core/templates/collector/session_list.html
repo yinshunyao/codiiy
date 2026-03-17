@@ -206,6 +206,16 @@
         align-self: auto;
         flex-shrink: 0;
     }
+    .message-action-row {
+        margin-top: 8px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+    .message-action-form {
+        margin: 0;
+    }
     .process-trace-wrap {
         margin-top: 8px;
         border: 1px solid var(--line);
@@ -482,27 +492,41 @@
                                     </div>
                                 {% endif %}
                             </div>
-                            {% if message.role == "user" and active_session and not is_summary_view %}
-                            {% if enable_summary_actions %}
-                            <form method="post" action="{% url 'session_extract_summary' chat_session.id message.id %}" style="margin-top: 8px; display: inline-block; margin-right: 6px;">
-                                {% csrf_token %}
-                                <button
-                                    type="submit"
-                                    class="chip llm-chip-btn icon-btn"
-                                    title="提炼总结会话"
-                                    aria-label="提炼总结会话"
-                                >摘</button>
-                            </form>
-                            {% endif %}
-                            <form method="post" action="{% url 'session_rollback' active_session.id message.id %}" style="margin-top: 8px;">
-                                {% csrf_token %}
-                                <button
-                                    type="submit"
-                                    class="chip llm-chip-btn icon-btn"
-                                    title="回退到这里"
-                                    aria-label="回退到这里"
-                                >&#8630;</button>
-                            </form>
+                            {% if active_session and not is_summary_view %}
+                            <div class="message-action-row">
+                                {% if message.role == "user" %}
+                                {% if enable_summary_actions %}
+                                <form method="post" action="{% url 'session_extract_summary' chat_session.id message.id %}" class="message-action-form">
+                                    {% csrf_token %}
+                                    <button
+                                        type="submit"
+                                        class="chip llm-chip-btn icon-btn"
+                                        title="提炼总结会话"
+                                        aria-label="提炼总结会话"
+                                    >摘</button>
+                                </form>
+                                {% endif %}
+                                <form method="post" action="{% url 'session_rollback' active_session.id message.id %}" class="message-action-form">
+                                    {% csrf_token %}
+                                    <button
+                                        type="submit"
+                                        class="chip llm-chip-btn icon-btn"
+                                        title="回退到这里"
+                                        aria-label="回退到这里"
+                                    >&#8630;</button>
+                                </form>
+                                {% endif %}
+                                <form method="post" action="{% url 'session_message_delete' active_session.id message.id %}" class="message-action-form">
+                                    {% csrf_token %}
+                                    <button
+                                        type="submit"
+                                        class="chip llm-chip-btn icon-btn"
+                                        title="删除消息"
+                                        aria-label="删除消息"
+                                        onclick="return confirm('确定删除这条消息吗？');"
+                                    >×</button>
+                                </form>
+                            </div>
                             {% endif %}
                         </div>
                     </div>

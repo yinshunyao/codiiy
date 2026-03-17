@@ -31,6 +31,11 @@ urlpatterns = [
         views.session_extract_summary,
         name="session_extract_summary",
     ),
+    path(
+        "sessions/<int:session_id>/messages/<int:message_id>/delete/",
+        views.session_message_delete,
+        name="session_message_delete",
+    ),
     path("sessions/<int:session_id>/rollback/<int:message_id>/", views.session_rollback, name="session_rollback"),
     path("sessions/<int:session_id>/delete/", views.session_delete, name="session_delete"),
     path("companions/", views.companion_list, name="companion_list"),
@@ -69,6 +74,11 @@ urlpatterns = [
         views.agent_item_download,
         name="agent_item_download",
     ),
+    path(
+        "agents/<str:module_name>/<str:item_name>/delete/",
+        views.agent_item_delete,
+        name="agent_item_delete",
+    ),
     path("system/skills/", views.system_skill_list, name="system_skill_list"),
     path("system/skills/upload/", views.system_skill_upload, name="system_skill_upload"),
     path("system/skills/<str:skill_name>/download/", views.system_skill_download, name="system_skill_download"),
@@ -90,6 +100,11 @@ urlpatterns = [
         "component/functions/<str:module_name>/<str:component_key>/toggle-enabled/",
         views.control_component_toggle_enabled,
         name="control_component_toggle_enabled",
+    ),
+    path(
+        "component/functions/<str:module_name>/<str:component_key>/delete/",
+        views.control_component_delete,
+        name="control_component_delete",
     ),
     path(
         "component/functions/<str:module_name>/test/",

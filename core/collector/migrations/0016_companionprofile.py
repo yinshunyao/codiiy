@@ -25,7 +25,7 @@ class Migration(migrations.Migration):
                     "allowed_agent_modules_text",
                     models.CharField(
                         blank=True,
-                        help_text="逗号分隔，如 mindforge,helm",
+                        help_text="逗号分隔，如 mindforge,skills",
                         max_length=200,
                         verbose_name="可调用智能体模块",
                     ),
@@ -36,7 +36,7 @@ class Migration(migrations.Migration):
                         blank=True,
                         help_text="逗号分隔，如 observe,handle",
                         max_length=200,
-                        verbose_name="可调用工具组件模块",
+                        verbose_name="可调用组件模块",
                     ),
                 ),
                 (

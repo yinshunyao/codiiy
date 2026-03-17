@@ -424,7 +424,7 @@ class ReActEngine:
                 input_data={"model": self.config.model},
                 error=str(exc),
             )
-            return "", f"调用 tools.mindforge_toolset.chat_completion 失败: {exc}", {}
+            return "", f"调用 capability_dispatcher.chat_completion 失败: {exc}", {}
 
         if not isinstance(call_result, dict) or not bool(call_result.get("success")):
             call_error = str(call_result.get("error", "调用 component_tool 失败"))

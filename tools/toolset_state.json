@@ -1,4 +1,5 @@
 {
   "rule_reader": false,
-  "coder": false
+  "coder": false,
+  "create_tool": false
 }

@@ -19,12 +19,6 @@ class AgentManagerTestCase(unittest.TestCase):
             readme="# React Strategy\ndescription: 负责 ReAct 推理执行。\n",
             files=["api.py", "engine.py", "__init__.py"],
         )
-        self._create_agent_item(
-            module_name="helm",
-            item_name="requirement_session_command",
-            readme="# Requirement Command\n用于会话状态流转。\n",
-            files=["command.py", "__init__.py"],
-        )
         self.original_agents_root = manager._AGENTS_ROOT
         self.original_state_path = manager._STATE_PATH
         manager._AGENTS_ROOT = self.agents_root
@@ -50,8 +44,8 @@ class AgentManagerTestCase(unittest.TestCase):
         self.assertIn('"mindforge": false', state_text)
 
     def test_resolve_agent_item_dir_should_validate_and_return_target(self):
-        normalized, target, error = manager.resolve_agent_item_dir("helm", "requirement_session_command")
-        self.assertEqual(normalized, "requirement_session_command")
+        normalized, target, error = manager.resolve_agent_item_dir("mindforge", "react_strategy")
+        self.assertEqual(normalized, "react_strategy")
         self.assertTrue(target and target.is_dir())
         self.assertEqual(error, "")
 

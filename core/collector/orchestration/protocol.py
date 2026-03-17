@@ -5,7 +5,6 @@ from typing import Any, Dict, List
 
 
 STEP_TYPE_AGENT = "agent"
-STEP_TYPE_COMMAND = "command"
 STEP_TYPE_TOOL = "tool"
 STEP_TYPE_SUMMARIZE = "summarize"
 

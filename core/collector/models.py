@@ -481,12 +481,12 @@ class CompanionProfile(models.Model):
         max_length=200,
         blank=True,
         verbose_name="可调用智能体模块",
-        help_text="逗号分隔，如 mindforge,helm",
+        help_text="逗号分隔，如 mindforge,skills",
     )
     allowed_control_modules_text = models.CharField(
         max_length=200,
         blank=True,
-        verbose_name="可调用工具组件模块",
+        verbose_name="可调用组件模块",
         help_text="逗号分隔，如 observe,handle",
     )
     allowed_toolsets_text = models.CharField(
@@ -504,6 +504,19 @@ class CompanionProfile(models.Model):
         blank=True,
         verbose_name="可调用组件 API",
         help_text="逗号分隔函数路径，如 component.observe.understand_current_screen",
+    )
+    adapter_type = models.CharField(
+        max_length=40,
+        blank=True,
+        default="",
+        verbose_name="adapter 类型",
+        help_text="外部 agent adapter 类型标识，如 process、http；空值表示不使用 adapter",
+    )
+    adapter_config = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="adapter 配置",
+        help_text="adapter 专属配置参数，JSON 格式",
     )
     knowledge_path = models.CharField(
         max_length=300,
