@@ -1,4 +1,7 @@
 <div class="brand" title="{{ menu_labels.system_name_hint }}">{{ menu_labels.system_name }}</div>
+<div class="sidebar-search-shell">
+    <input type="text" class="sidebar-search-input" placeholder="搜索节点..." aria-label="搜索节点（即将开放）" disabled>
+</div>
 
 <div class="menu-tree">
     <section class="menu-section is-open" data-menu-section>
@@ -108,4 +111,7 @@
             <span class="sidebar-theme-slider"></span>
         </label>
     </form>
+    <div class="sidebar-bottom-actions">
+        <a class="sidebar-new-session-btn" href="{% url 'session_create' %}">+ 新会话</a>
+    </div>
 </div>

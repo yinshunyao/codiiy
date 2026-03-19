@@ -4,6 +4,7 @@ import importlib
 import inspect
 import ast
 import json
+import hashlib
 import platform
 import re
 import shutil
@@ -1212,6 +1213,14 @@ def _run_chat_reply_task(task_id, mindforge_strategy_override: str = "", compani
                 _append_realtime_trace_event_and_merge_token(
                     process_trace=process_trace,
                     event_payload={
+                        "event_id": str(event_payload.get("event_id") or "").strip(),
+                        "parent_event_id": str(event_payload.get("parent_event_id") or "").strip(),
+                        "step_id": str(event_payload.get("step_id") or event_input.get("step_id") or "").strip(),
+                        "parent_step_id": str(
+                            event_payload.get("parent_step_id")
+                            or event_input.get("parent_step_id")
+                            or ""
+                        ).strip(),
                         "kind": str(event_payload.get("kind") or "process"),
                         "title": event_title or "步骤",
                         "status": event_status,
@@ -2439,15 +2448,21 @@ def _append_realtime_trace_event_and_merge_token(process_trace, event_payload):
     if not isinstance(process_trace, dict) or not isinstance(event_payload, dict):
         return
     event_token_usage = _extract_trace_event_token_usage(event_payload)
+    event_input = event_payload.get("input")
+    event_input = event_input if isinstance(event_input, dict) else {}
     _append_process_trace_event(
         process_trace=process_trace,
         kind=str(event_payload.get("kind") or "process"),
         title=str(event_payload.get("title") or "步骤"),
         status=str(event_payload.get("status") or "running"),
-        input_data=event_payload.get("input"),
+        input_data=event_input,
         output_data=event_payload.get("output"),
         error=str(event_payload.get("error") or ""),
         token_usage=event_token_usage,
+        event_id=str(event_payload.get("event_id") or "").strip(),
+        parent_event_id=str(event_payload.get("parent_event_id") or "").strip(),
+        step_id=str(event_payload.get("step_id") or event_input.get("step_id") or "").strip(),
+        parent_step_id=str(event_payload.get("parent_step_id") or event_input.get("parent_step_id") or "").strip(),
     )
     if event_token_usage:
         _set_process_trace_token_usage(process_trace, event_token_usage, merge=True)
@@ -2790,6 +2805,10 @@ def _append_process_trace_event(
     output_data=None,
     error="",
     token_usage=None,
+    event_id="",
+    parent_event_id="",
+    step_id="",
+    parent_step_id="",
 ):
     if not isinstance(process_trace, dict):
         return
@@ -2801,8 +2820,18 @@ def _append_process_trace_event(
     if len(events) >= max_events:
         events.pop(0)
     event_ts = _current_process_trace_ts_text()
+    normalized_event_id = str(event_id or "").strip()
+    if not normalized_event_id:
+        normalized_event_id = f"evt_{len(events) + 1}_{int(time.time() * 1000)}"
+    normalized_parent_event_id = str(parent_event_id or "").strip()
+    normalized_step_id = str(step_id or "").strip()
+    normalized_parent_step_id = str(parent_step_id or "").strip()
     events.append(
         {
+            "event_id": normalized_event_id,
+            "parent_event_id": normalized_parent_event_id,
+            "step_id": normalized_step_id,
+            "parent_step_id": normalized_parent_step_id,
             "kind": str(kind or "").strip() or "process",
             "title": str(title or "").strip() or "步骤",
             "status": str(status or "").strip() or "success",
@@ -2971,13 +3000,35 @@ def _normalize_process_trace(raw_trace):
     for item in events:
         if not isinstance(item, dict):
             continue
-        normalized.append(
+        event_input = item.get("input")
+        event_input = event_input if isinstance(event_input, dict) else {}
+        event_output = item.get("output")
+        event_key_payload = json.dumps(
             {
                 "kind": str(item.get("kind") or "process"),
                 "title": str(item.get("title") or "步骤"),
                 "status": str(item.get("status") or "success"),
-                "input": item.get("input"),
-                "output": item.get("output"),
+                "ts": _normalize_process_trace_ts_text(item.get("ts")),
+                "input": event_input,
+                "output": event_output,
+                "error": str(item.get("error") or ""),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        fallback_event_id = f"evt_{hashlib.md5(event_key_payload.encode('utf-8')).hexdigest()[:12]}"
+        normalized.append(
+            {
+                "event_id": str(item.get("event_id") or "").strip() or fallback_event_id,
+                "parent_event_id": str(item.get("parent_event_id") or "").strip(),
+                "step_id": str(item.get("step_id") or event_input.get("step_id") or "").strip(),
+                "parent_step_id": str(item.get("parent_step_id") or event_input.get("parent_step_id") or "").strip(),
+                "kind": str(item.get("kind") or "process"),
+                "title": str(item.get("title") or "步骤"),
+                "status": str(item.get("status") or "success"),
+                "input": event_input,
+                "output": event_output,
                 "error": str(item.get("error") or ""),
                 "ts": _normalize_process_trace_ts_text(item.get("ts")),
                 "token_usage": _normalize_token_usage(item.get("token_usage")),
@@ -3052,6 +3103,7 @@ def _build_messages_with_process_trace(session_obj):
         trace = trace_by_message_id.get(msg.id, {"events": []})
         msg.process_trace = trace
         msg.process_trace_events = trace.get("events", [])
+        msg.process_trace_tree = _build_process_trace_tree(msg.process_trace_events)
         msg.token_usage = _normalize_token_usage(trace.get("token_usage"))
         msg.responder_name = "助手"
         if str(getattr(msg, "role", "")) == RequirementMessage.ROLE_USER:
@@ -7159,6 +7211,7 @@ def chat_reply_task_status(request, session_id, task_id):
             assistant_text = f"任务执行失败：{fallback_error}" if fallback_error else "任务执行失败，请稍后重试。"
         if task.assistant_message_id:
             RequirementMessage.objects.filter(id=task.assistant_message_id).update(content=assistant_text)
+    process_trace_tree = _build_process_trace_tree(process_trace.get("events"))
     return JsonResponse(
         {
             "success": True,
@@ -7173,6 +7226,7 @@ def chat_reply_task_status(request, session_id, task_id):
             "tool_events": orchestration_meta.get("tool_events", []),
             "fallback_used": bool(orchestration_meta.get("fallback_used", False)),
             "process_trace": process_trace,
+            "process_trace_tree": process_trace_tree,
             "interaction": interaction_payload,
             "runtime_status": runtime_status,
             "status_hint": status_hint,
@@ -7180,6 +7234,133 @@ def chat_reply_task_status(request, session_id, task_id):
             "responder_name": _resolve_responder_name_for_session_task(task.session, task=task),
         }
     )
+
+
+def _build_process_trace_tree(events):
+    event_list = events if isinstance(events, list) else []
+    if not event_list:
+        return []
+    roots = []
+    node_by_step_id = {}
+    attached_nodes = set()
+
+    def _extract_step_id_from_title(title_text):
+        title = str(title_text or "").strip()
+        if not title:
+            return ""
+        react_match = re.match(r"^(ReAct|Reflexion)\\s*step\\s*(\\d+)\\s*(.*)$", title, re.IGNORECASE)
+        if react_match:
+            strategy = str(react_match.group(1) or "").strip().lower()
+            step_no = str(react_match.group(2) or "").strip()
+            tail = str(react_match.group(3) or "").strip()
+            tail = re.sub(r"\\s*#\\d+\\s*$", "", tail).strip()
+            tail = re.sub(r"(开始|结束|结果|返回|完成)\\s*$", "", tail).strip()
+            if "工具调用" in tail:
+                suffix = "tool_call"
+            elif "推理调用" in tail:
+                suffix = "reasoning_call"
+            elif "失败保护" in tail:
+                suffix = "failure_guard"
+            elif tail:
+                suffix = re.sub(r"\\s+", "_", tail.lower())
+            else:
+                suffix = "step"
+            return f"{strategy}_step_{step_no}_{suffix}"
+        step_match = re.match(r"^([A-Za-z0-9_\\-]+)\\s+", title)
+        if step_match:
+            return str(step_match.group(1) or "").strip()
+        return ""
+
+    def _attach_to_parent(parent_step_id, node):
+        if not parent_step_id:
+            if node["node_id"] not in attached_nodes:
+                roots.append(node)
+                attached_nodes.add(node["node_id"])
+            return
+        parent_node = node_by_step_id.get(parent_step_id)
+        if not parent_node:
+            parent_node = {
+                "node_id": f"step:{parent_step_id}",
+                "step_id": parent_step_id,
+                "title": parent_step_id,
+                "kind": "process",
+                "status": "running",
+                "start_event": {},
+                "end_event": {},
+                "events": [],
+                "children": [],
+            }
+            node_by_step_id[parent_step_id] = parent_node
+        if node["node_id"] == parent_node["node_id"]:
+            if node["node_id"] not in attached_nodes:
+                roots.append(node)
+                attached_nodes.add(node["node_id"])
+            return
+        child_ids = {str(item.get("node_id") or "") for item in parent_node.get("children", []) if isinstance(item, dict)}
+        if node["node_id"] not in child_ids:
+            parent_node["children"].append(node)
+        if parent_node["node_id"] not in attached_nodes:
+            roots.append(parent_node)
+            attached_nodes.add(parent_node["node_id"])
+
+    for item in event_list:
+        if not isinstance(item, dict):
+            continue
+        event = dict(item)
+        event_input = event.get("input") if isinstance(event.get("input"), dict) else {}
+        event_status = str(event.get("status") or "running").strip() or "running"
+        step_id = str(event.get("step_id") or event_input.get("step_id") or "").strip()
+        if not step_id:
+            step_id = _extract_step_id_from_title(event.get("title"))
+        parent_step_id = str(event.get("parent_step_id") or event_input.get("parent_step_id") or "").strip()
+
+        if not step_id:
+            leaf = {
+                "node_id": f"event:{str(event.get('event_id') or '')}",
+                "step_id": "",
+                "title": str(event.get("title") or "步骤"),
+                "kind": str(event.get("kind") or "process"),
+                "status": event_status,
+                "start_event": event if event_status == "running" else {},
+                "end_event": event if event_status != "running" else {},
+                "events": [event],
+                "children": [],
+            }
+            _attach_to_parent(parent_step_id, leaf)
+            continue
+
+        node = node_by_step_id.get(step_id)
+        if not node:
+            node = {
+                "node_id": f"step:{step_id}",
+                "step_id": step_id,
+                "title": str(event.get("title") or step_id),
+                "kind": str(event.get("kind") or "process"),
+                "status": event_status,
+                "start_event": {},
+                "end_event": {},
+                "events": [],
+                "children": [],
+            }
+            node_by_step_id[step_id] = node
+        node["events"].append(event)
+        node["kind"] = str(event.get("kind") or node.get("kind") or "process")
+        if event_status == "running" and not node.get("start_event"):
+            node["start_event"] = event
+        if event_status in {"success", "failed", "stopped", "skipped"}:
+            node["end_event"] = event
+            node["status"] = event_status
+        elif not node.get("end_event"):
+            node["status"] = event_status
+        if node["title"] == step_id:
+            node["title"] = str(event.get("title") or step_id)
+        _attach_to_parent(parent_step_id, node)
+
+    for node in node_by_step_id.values():
+        if node["node_id"] not in attached_nodes:
+            roots.append(node)
+            attached_nodes.add(node["node_id"])
+    return roots
 
 
 @login_required

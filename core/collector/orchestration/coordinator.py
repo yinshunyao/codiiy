@@ -34,6 +34,8 @@ class Coordinator:
         self.mindforge_runner = MindforgeRunner()
         self.tool_runner = ToolRunner()
         self._event_callback = None
+        self._trace_event_seq = 0
+        self._last_event_id_by_step = {}
 
     def run_plan(self, plan, runtime_context: Dict) -> OrchestrationResult:
         step_results: List[StepResult] = []
@@ -58,6 +60,8 @@ class Coordinator:
         tool_max_attempts = self._normalize_tool_max_attempts(runtime_context.get("tool_max_attempts"))
         callback_candidate = runtime_context.get("event_callback")
         self._event_callback = callback_candidate if callable(callback_candidate) else None
+        self._trace_event_seq = 0
+        self._last_event_id_by_step = {}
         stop_checker = runtime_context.get("stop_checker")
         stop_checker = stop_checker if callable(stop_checker) else None
 
@@ -497,6 +501,7 @@ class Coordinator:
         for attempt_idx, function_path in enumerate(ordered_targets[:effective_max_attempts], start=1):
             self._raise_if_stop_requested(stop_checker)
             attempt_start_ms = now_ms()
+            attempt_step_id = f"{step.step_id}::tool_attempt_{attempt_idx}"
             trace_events.append(
                 self._new_trace_event(
                     kind="code_call",
@@ -507,6 +512,7 @@ class Coordinator:
                         "attempt": attempt_idx,
                         "query": query_text,
                     },
+                    step_id=attempt_step_id,
                 )
             )
             status, output = self.tool_runner.run(
@@ -542,17 +548,10 @@ class Coordinator:
                         "function_path": function_path,
                         "attempt": attempt_idx,
                         "duration_ms": attempt_duration_ms,
+                        "result": self._summarize_payload(output_dict),
                     },
                     error=str(output_dict.get("error") or ""),
-                )
-            )
-            trace_events.append(
-                self._new_trace_event(
-                    kind="code_call",
-                    title=f"{step.step_id} 工具调用结果 #{attempt_idx}",
-                    status=status,
-                    output_data=self._summarize_payload(output_dict),
-                    error=str(output_dict.get("error") or ""),
+                    step_id=attempt_step_id,
                 )
             )
             if status == STEP_STATUS_SUCCESS:
@@ -924,18 +923,47 @@ class Coordinator:
         output_data=None,
         error: str = "",
         token_usage=None,
+        step_id: str = "",
+        parent_step_id: str = "",
+        event_id: str = "",
+        parent_event_id: str = "",
     ) -> Dict:
+        self._trace_event_seq += 1
+        input_payload = input_data if isinstance(input_data, dict) else {}
+        title_text = str(title or "步骤").strip() or "步骤"
+        resolved_step_id = str(step_id or input_payload.get("step_id") or "").strip()
+        if not resolved_step_id:
+            prefix_match = re.match(r"^([A-Za-z0-9_\\-]+)\\s+", title_text)
+            if prefix_match:
+                resolved_step_id = str(prefix_match.group(1) or "").strip()
+        if not resolved_step_id:
+            react_match = re.match(r"^(ReAct\\s*step\\s*\\d+)", title_text, re.IGNORECASE)
+            if react_match:
+                resolved_step_id = re.sub(r"\\s+", "_", str(react_match.group(1) or "").strip().lower())
+        resolved_parent_step_id = str(parent_step_id or input_payload.get("parent_step_id") or "").strip()
+        resolved_event_id = str(event_id or "").strip()
+        if not resolved_event_id:
+            resolved_event_id = f"coord_{int(now_ms())}_{self._trace_event_seq}"
+        resolved_parent_event_id = str(parent_event_id or "").strip()
+        if not resolved_parent_event_id and resolved_parent_step_id:
+            resolved_parent_event_id = str(self._last_event_id_by_step.get(resolved_parent_step_id) or "").strip()
         normalized_usage = self._extract_token_usage({"token_usage": token_usage, "output": output_data})
         event = {
+            "event_id": resolved_event_id,
+            "parent_event_id": resolved_parent_event_id,
+            "step_id": resolved_step_id,
+            "parent_step_id": resolved_parent_step_id,
             "kind": str(kind or "process").strip() or "process",
-            "title": str(title or "步骤").strip() or "步骤",
+            "title": title_text,
             "status": str(status or "running").strip() or "running",
-            "input": input_data if input_data not in (None, "", {}) else {},
+            "input": input_payload if input_payload not in (None, "", {}) else {},
             "output": output_data if output_data not in (None, "", {}) else {},
             "error": str(error or "").strip(),
             "ts": self._now_text(),
             "token_usage": normalized_usage,
         }
+        if resolved_step_id:
+            self._last_event_id_by_step[resolved_step_id] = resolved_event_id
         if callable(self._event_callback):
             try:
                 self._event_callback(dict(event))
@@ -962,6 +990,9 @@ class Coordinator:
                 output_data=event_payload.get("output"),
                 error=str(event_payload.get("error") or ""),
                 token_usage=event_payload.get("token_usage"),
+                step_id=str(event_payload.get("step_id") or merged_input.get("step_id") or "").strip(),
+                parent_step_id=str(merged_input.get("parent_step_id") or "").strip(),
+                parent_event_id=str(event_payload.get("parent_event_id") or "").strip(),
             )
 
         return _callback

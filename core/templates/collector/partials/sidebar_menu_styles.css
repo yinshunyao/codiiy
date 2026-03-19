@@ -2,6 +2,26 @@
     gap: 10px;
     min-height: 0;
 }
+.sidebar-search-shell {
+    padding: 0 4px 2px;
+}
+.sidebar-search-input {
+    width: 100%;
+    height: 36px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    padding: 0 12px;
+    font-size: 13px;
+}
+.sidebar-search-input::placeholder {
+    color: var(--muted);
+}
+.sidebar-search-input:disabled {
+    opacity: 0.8;
+    cursor: not-allowed;
+}
 .menu-tree {
     display: flex;
     flex-direction: column;
@@ -172,6 +192,8 @@
 }
 .user-card {
     margin-top: auto;
+    border-radius: 14px;
+    padding: 12px;
 }
 .user-top-row {
     display: flex;
@@ -242,6 +264,26 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+}
+.sidebar-bottom-actions {
+    margin-top: 10px;
+}
+.sidebar-new-session-btn {
+    width: 100%;
+    min-height: 34px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--panel-2);
+}
+.sidebar-new-session-btn:hover {
+    text-decoration: none;
+    background: var(--menu-section-hover-bg);
 }
 .sidebar-theme-toggle {
     position: relative;

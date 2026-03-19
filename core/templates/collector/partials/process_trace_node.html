@@ -1,0 +1,78 @@
+<details class="process-trace-step {% if node.step_id %}is-node-step{% else %}is-node-event{% endif %}{% if depth > 0 %} is-depth-{% if depth > 4 %}4{% else %}{{ depth }}{% endif %}{% endif %}">
+    <summary>
+        {{ node.title|default:"步骤" }} · {{ node.status|default:"running" }}
+        {% if node.end_event.ts %}
+            · 完成时间 {{ node.end_event.ts }}
+        {% elif node.start_event.ts %}
+            · 开始时间 {{ node.start_event.ts }}
+        {% endif %}
+        {% if node.kind %}
+            · {% if node.kind == "llm_call" %}大模型调用{% elif node.kind == "code_call" %}工具/代码调用{% elif node.kind == "result" %}结果写回{% else %}流程步骤{% endif %}
+        {% endif %}
+        {% if node.end_event.token_usage %}
+            · Token {{ node.end_event.token_usage.total_tokens|default:0 }}
+        {% elif node.start_event.token_usage %}
+            · Token {{ node.start_event.token_usage.total_tokens|default:0 }}
+        {% endif %}
+    </summary>
+
+    {% if node.kind %}
+    <div class="process-trace-block">
+        <strong>类型：</strong>
+        {% if node.kind == "llm_call" %}大模型调用
+        {% elif node.kind == "code_call" %}工具/代码调用
+        {% elif node.kind == "result" %}结果写回
+        {% else %}流程步骤{% endif %}
+    </div>
+    {% endif %}
+
+    {% if node.start_event %}
+    <div class="process-trace-block">
+        <strong>开始：</strong>{{ node.start_event.title|default:"开始" }}
+        {% if node.start_event.ts %} · {{ node.start_event.ts }}{% endif %}
+    </div>
+    {% endif %}
+
+    {% if node.end_event %}
+    <div class="process-trace-block">
+        <strong>结束：</strong>{{ node.end_event.title|default:"结束" }} · {{ node.end_event.status|default:"success" }}
+        {% if node.end_event.ts %} · {{ node.end_event.ts }}{% endif %}
+    </div>
+    {% endif %}
+
+    {% if node.end_event.token_usage %}
+    <div class="process-trace-block">
+        <strong>Token：</strong>
+        输入 {{ node.end_event.token_usage.prompt_tokens|default:0 }} / 输出 {{ node.end_event.token_usage.completion_tokens|default:0 }} / 总计 {{ node.end_event.token_usage.total_tokens|default:0 }}
+    </div>
+    {% elif node.start_event.token_usage %}
+    <div class="process-trace-block">
+        <strong>Token：</strong>
+        输入 {{ node.start_event.token_usage.prompt_tokens|default:0 }} / 输出 {{ node.start_event.token_usage.completion_tokens|default:0 }} / 总计 {{ node.start_event.token_usage.total_tokens|default:0 }}
+    </div>
+    {% endif %}
+
+    {% if not node.step_id %}
+        {% if node.start_event.input %}
+        <div class="process-trace-block"><strong>输入：</strong><pre>{{ node.start_event.input }}</pre></div>
+        {% elif node.end_event.input %}
+        <div class="process-trace-block"><strong>输入：</strong><pre>{{ node.end_event.input }}</pre></div>
+        {% endif %}
+        {% if node.end_event.output %}
+        <div class="process-trace-block"><strong>输出：</strong><pre>{{ node.end_event.output }}</pre></div>
+        {% elif node.start_event.output %}
+        <div class="process-trace-block"><strong>输出：</strong><pre>{{ node.start_event.output }}</pre></div>
+        {% endif %}
+        {% if node.end_event.error %}
+        <div class="process-trace-block"><strong>错误：</strong><pre>{{ node.end_event.error }}</pre></div>
+        {% elif node.start_event.error %}
+        <div class="process-trace-block"><strong>错误：</strong><pre>{{ node.start_event.error }}</pre></div>
+        {% endif %}
+    {% endif %}
+
+    {% if node.children %}
+        {% for child in node.children %}
+            {% include "collector/partials/process_trace_node.html" with node=child depth=depth|add:"1" %}
+        {% endfor %}
+    {% endif %}
+</details>

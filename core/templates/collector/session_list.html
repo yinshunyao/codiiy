@@ -6,7 +6,59 @@
 {% block content %}
 <style>
     .app-shell-chat {
-        grid-template-columns: 260px 1fr;
+        grid-template-columns: 280px 1fr;
+        gap: 10px;
+        padding: 10px;
+        height: 100vh;
+    }
+    .app-shell-chat .sidebar {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        height: calc(100vh - 20px);
+        background: var(--sidebar-bg);
+    }
+    .app-shell-chat .brand {
+        font-size: 16px;
+        margin-bottom: 10px;
+    }
+    .app-shell-chat .main-panel {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 18px;
+        background: var(--panel);
+        height: calc(100vh - 20px);
+    }
+    .chat-page-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 12px;
+    }
+    .chat-page-title {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.2;
+        font-weight: 650;
+    }
+    .chat-page-subtitle {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+    }
+    .chat-resource-link {
+        align-self: center;
+    }
+    .top-actions {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel-2);
+        padding: 8px 10px;
+        margin-bottom: 12px;
+    }
+    .top-actions-left,
+    .top-actions-right {
+        flex-wrap: wrap;
     }
     {% include "collector/partials/sidebar_menu_styles.css" %}
     .chat-main-layout {
@@ -35,6 +87,21 @@
     }
     .chat-main-layout .conversation::-webkit-scrollbar-thumb:hover {
         background: rgba(156, 167, 195, 0.85);
+    }
+    .chat-main-layout .conversation {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+        padding: 10px 12px;
+    }
+    .chat-main-layout .chat-track {
+        max-width: 900px;
+    }
+    .chat-main-layout .panel {
+        border-radius: 12px;
+    }
+    .chat-session-header {
+        margin-bottom: 6px;
     }
     .session-history {
         display: flex;
@@ -189,22 +256,57 @@
     .mention-suggestion-item .meta {
         margin-top: 2px;
     }
-    .composer-action-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        margin: 0 10px;
+    .composer {
+        margin-top: 12px;
+        padding: 0;
+        background: transparent;
+        border: none;
     }
-    .composer-action-row .composer-status {
-        margin: 0;
-        flex: 1;
-        min-width: 0;
+    .composer-form {
+        gap: 6px;
     }
-    .composer-action-row .composer-submit-btn {
-        margin: 0;
-        align-self: auto;
+    .composer .chat-input-shell {
+        min-height: 62px;
+        border-radius: 16px;
+        padding: 8px 10px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    }
+    .composer .chat-input-main textarea {
+        min-height: 24px;
+        max-height: 120px;
+        padding: 2px 4px;
+    }
+    .composer .plus-btn {
+        width: 34px;
+        height: 34px;
+        font-size: 28px;
+    }
+    .composer .mic-btn {
+        width: 34px;
+        height: 34px;
+        color: var(--muted);
+    }
+    .composer .composer-submit-btn {
+        width: 42px;
+        height: 42px;
+        border-radius: 999px;
+        border: none;
+        padding: 0;
         flex-shrink: 0;
+        background: var(--primary);
+        color: #ffffff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .composer .composer-submit-btn:hover {
+        background: var(--primary-hover);
+    }
+    .composer-status {
+        display: none;
+    }
+    .composer-attachment-info {
+        margin: 0 8px;
     }
     .message-action-row {
         margin-top: 8px;
@@ -229,6 +331,18 @@
         border-radius: 8px;
         background: rgba(255, 255, 255, 0.02);
         padding: 6px 8px;
+    }
+    .process-trace-step.is-depth-1 { margin-left: 12px; }
+    .process-trace-step.is-depth-2 { margin-left: 24px; }
+    .process-trace-step.is-depth-3 { margin-left: 36px; }
+    .process-trace-step.is-depth-4 { margin-left: 48px; }
+    .process-trace-step.is-node-step > summary {
+        color: var(--text);
+        font-weight: 600;
+    }
+    .process-trace-step.is-node-event > summary {
+        color: var(--muted);
+        font-weight: 500;
     }
     .process-trace-step summary {
         cursor: pointer;
@@ -331,6 +445,15 @@
         text-align: left;
     }
     @media (max-width: 1200px) {
+        .app-shell-chat {
+            grid-template-columns: 1fr;
+            gap: 8px;
+            padding: 8px;
+        }
+        .app-shell-chat .sidebar,
+        .app-shell-chat .main-panel {
+            height: auto;
+        }
         .chat-main-layout {
             --summary-drawer-width: min(360px, 88vw);
         }
@@ -348,6 +471,13 @@
     </aside>
 
     <main class="main-panel">
+        <header class="chat-page-header">
+            <div>
+                <h1 class="chat-page-title">{% if is_companion_chat and companion_chat %}{{ companion_chat.display_name|default:companion_chat.name }}{% else %}The Digital Curator{% endif %}</h1>
+                <p class="chat-page-subtitle">{% if is_companion_chat %}智能伙伴对话空间{% else %}Resource system panel{% endif %}</p>
+            </div>
+            <a class="chip chat-resource-link" href="{% url 'requirement_file_list' %}">Resource Manager</a>
+        </header>
         <div class="top-actions">
             <div class="top-actions-left">
                 {% if is_companion_chat %}
@@ -379,7 +509,6 @@
                 {% endif %}
             </div>
             <div class="top-actions-right">
-                <a class="chip" href="{% url 'requirement_file_list' %}">资源管理器</a>
                 {% if current_project %}
                 <span class="chip" title="{{ current_project.path }}">项目: {{ current_project.name }}</span>
                 {% endif %}
@@ -405,7 +534,7 @@
             >
                 <div class="chat-track">
                     {% if active_session %}
-                    <div class="panel" style="margin-bottom: 2px;">
+                    <div class="panel chat-session-header">
                         <strong>{% if is_companion_chat and companion_chat %}{{ companion_chat.display_name|default:companion_chat.name }}{% else %}{{ active_session.title }}{% endif %}</strong>
                         <div class="meta">创建时间：{{ active_session.created_at|date:"Y-m-d H:i" }}</div>
                     </div>
@@ -424,48 +553,8 @@
                             </div>
                             {% if message.role == "assistant" %}
                             <div class="process-trace-wrap" {% if not message.process_trace_events %}style="display: none;"{% endif %}>
-                                {% for event in message.process_trace_events %}
-                                <details class="process-trace-step">
-                                    <summary>
-                                        {{ forloop.counter }}. {{ event.title }} · {{ event.status }}
-                                        {% if event.ts %} · {{ event.ts }}{% endif %}
-                                        {% if event.kind == "llm_call" %}
-                                        · 大模型调用
-                                        {% elif event.kind == "code_call" %}
-                                        · 工具/代码调用
-                                        {% elif event.kind == "result" %}
-                                        · 结果写回
-                                        {% else %}
-                                        · 流程步骤
-                                        {% endif %}
-                                        {% if event.token_usage %}
-                                        · Token {{ event.token_usage.total_tokens|default:0 }}
-                                        {% endif %}
-                                    </summary>
-                                    {% if event.kind %}
-                                    <div class="process-trace-block"><strong>类型：</strong>
-                                        {% if event.kind == "llm_call" %}大模型调用
-                                        {% elif event.kind == "code_call" %}工具/代码调用
-                                        {% elif event.kind == "result" %}结果写回
-                                        {% else %}流程步骤{% endif %}
-                                    </div>
-                                    {% endif %}
-                                    {% if event.token_usage %}
-                                    <div class="process-trace-block">
-                                        <strong>Token：</strong>
-                                        输入 {{ event.token_usage.prompt_tokens|default:0 }} / 输出 {{ event.token_usage.completion_tokens|default:0 }} / 总计 {{ event.token_usage.total_tokens|default:0 }}
-                                    </div>
-                                    {% endif %}
-                                    {% if event.input %}
-                                    <div class="process-trace-block"><strong>输入：</strong><pre>{{ event.input }}</pre></div>
-                                    {% endif %}
-                                    {% if event.output %}
-                                    <div class="process-trace-block"><strong>输出：</strong><pre>{{ event.output }}</pre></div>
-                                    {% endif %}
-                                    {% if event.error %}
-                                    <div class="process-trace-block"><strong>错误：</strong><pre>{{ event.error }}</pre></div>
-                                    {% endif %}
-                                </details>
+                                {% for node in message.process_trace_tree %}
+                                    {% include "collector/partials/process_trace_node.html" with node=node depth=0 %}
                                 {% endfor %}
                             </div>
                             <div data-interaction-container="1"></div>
@@ -615,18 +704,15 @@
                             <path d="M19 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.93V21H9a1 1 0 0 0 0 2h6a1 1 0 0 0 0-2h-2v-3.07A7 7 0 0 0 19 11Z" fill="currentColor"/>
                         </svg>
                     </button>
-                    <button type="button" id="voiceRecordToggle" class="voice-orb-btn" title="录音" aria-label="录音">
-                        <span class="voice-bar"></span>
-                        <span class="voice-bar"></span>
-                        <span class="voice-bar"></span>
+                    <button type="submit" id="composerSubmitBtn" class="composer-submit-btn" {% if is_summary_view %}disabled{% endif %} title="发送" aria-label="发送">
+                        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6 4.5 20 12 6 19.5V13l9-1-9-1V4.5Z" fill="currentColor"/>
+                        </svg>
                     </button>
                 </div>
                 <input type="file" id="id_attachment" name="attachment" style="display: none;">
                 <div id="selectedAttachmentInfo" class="meta composer-attachment-info"></div>
-                <div class="composer-action-row">
-                    <div id="voiceRecordStatus" class="meta composer-status">未开始语音输入</div>
-                    <button type="submit" id="composerSubmitBtn" class="composer-submit-btn" {% if is_summary_view %}disabled{% endif %}>发送</button>
-                </div>
+                <div id="voiceRecordStatus" class="meta composer-status">未开始语音输入</div>
                 {% if rollback_draft and rollback_draft.attachment_path %}
                 <div class="meta" style="margin-top: 6px;">
                     回退附件：<span class="chip" style="padding: 2px 8px;">{{ rollback_draft.attachment_name }}</span>
@@ -1019,10 +1105,315 @@
         };
 
         const buildEventOpenKey = function (event, index) {
+            const eventId = String(event && event.event_id || "").trim();
+            if (eventId) {
+                return `event::${eventId}`;
+            }
             const kind = String(event && event.kind || "");
             const title = String(event && event.title || "");
             const ts = String(event && event.ts || "");
             return `${kind}::${title}::${ts}::${index}`;
+        };
+
+        const buildNodeOpenKey = function (node, index, depth) {
+            const nodeId = String(node && node.nodeId || "").trim();
+            if (nodeId) {
+                return `node::${nodeId}`;
+            }
+            return `node::${depth}::${index}`;
+        };
+
+        const normalizeEventStatus = function (status) {
+            const normalized = String(status || "").trim().toLowerCase();
+            if (["running", "success", "failed", "stopped", "skipped"].includes(normalized)) {
+                return normalized;
+            }
+            return "running";
+        };
+
+        const normalizeNodeStatus = function (currentStatus, incomingStatus) {
+            const priority = { failed: 5, stopped: 4, running: 3, skipped: 2, success: 1 };
+            const normalizedCurrent = normalizeEventStatus(currentStatus);
+            const normalizedIncoming = normalizeEventStatus(incomingStatus);
+            if ((priority[normalizedIncoming] || 0) >= (priority[normalizedCurrent] || 0)) {
+                return normalizedIncoming;
+            }
+            return normalizedCurrent;
+        };
+
+        const extractStepIdFromTitle = function (titleText) {
+            const title = String(titleText || "").trim();
+            if (!title) {
+                return "";
+            }
+            const reactMatch = title.match(/^(ReAct|Reflexion)\s*step\s*(\d+)\s*(.*)$/i);
+            if (reactMatch) {
+                const strategy = String(reactMatch[1] || "").trim().toLowerCase();
+                const stepNo = String(reactMatch[2] || "").trim();
+                let tail = String(reactMatch[3] || "").trim();
+                tail = tail.replace(/\s*#\d+\s*$/g, "").trim();
+                tail = tail.replace(/(开始|结束|结果|返回|完成)\s*$/g, "").trim();
+                let suffix = "step";
+                if (tail.includes("工具调用")) {
+                    suffix = "tool_call";
+                } else if (tail.includes("推理调用")) {
+                    suffix = "reasoning_call";
+                } else if (tail.includes("失败保护")) {
+                    suffix = "failure_guard";
+                } else if (tail) {
+                    suffix = tail.toLowerCase().replace(/\s+/g, "_");
+                }
+                return `${strategy}_step_${stepNo}_${suffix}`;
+            }
+            const stepPrefixMatch = title.match(/^([A-Za-z0-9_\-]+)\s+/);
+            if (stepPrefixMatch) {
+                return String(stepPrefixMatch[1] || "").trim();
+            }
+            return "";
+        };
+
+        const extractEventStepId = function (event) {
+            if (!event || typeof event !== "object") {
+                return "";
+            }
+            const inputPayload = event.input && typeof event.input === "object" ? event.input : {};
+            return String(
+                event.step_id
+                || inputPayload.step_id
+                || extractStepIdFromTitle(event.title)
+                || ""
+            ).trim();
+        };
+
+        const extractEventParentStepId = function (event) {
+            if (!event || typeof event !== "object") {
+                return "";
+            }
+            const inputPayload = event.input && typeof event.input === "object" ? event.input : {};
+            return String(event.parent_step_id || inputPayload.parent_step_id || "").trim();
+        };
+
+        const isLikelyStartEvent = function (event) {
+            const status = normalizeEventStatus(event && event.status);
+            const title = String(event && event.title || "");
+            if (status === "running") {
+                return true;
+            }
+            return /(开始|触发)/.test(title);
+        };
+
+        const isLikelyEndEvent = function (event) {
+            const status = normalizeEventStatus(event && event.status);
+            const title = String(event && event.title || "");
+            if (["success", "failed", "stopped", "skipped"].includes(status)) {
+                return true;
+            }
+            return /(结束|完成|结果|返回)/.test(title);
+        };
+
+        const buildProcessTraceTreeFromEvents = function (events) {
+            const eventList = Array.isArray(events) ? events : [];
+            if (!eventList.length) {
+                return [];
+            }
+            const roots = [];
+            const nodeByStepId = new Map();
+            const attachedNodeIds = new Set();
+
+            const ensureStepNode = function (stepId, sampleEvent) {
+                const normalizedStepId = String(stepId || "").trim();
+                if (!normalizedStepId) {
+                    return null;
+                }
+                if (nodeByStepId.has(normalizedStepId)) {
+                    return nodeByStepId.get(normalizedStepId);
+                }
+                const sample = sampleEvent && typeof sampleEvent === "object" ? sampleEvent : {};
+                const node = {
+                    nodeType: "step",
+                    nodeId: `step:${normalizedStepId}`,
+                    stepId: normalizedStepId,
+                    title: String(sample.title || normalizedStepId),
+                    kind: String(sample.kind || "process"),
+                    status: normalizeEventStatus(sample.status || "running"),
+                    startEvent: null,
+                    endEvent: null,
+                    events: [],
+                    children: [],
+                };
+                nodeByStepId.set(normalizedStepId, node);
+                return node;
+            };
+
+            const attachNode = function (node, parentStepId) {
+                const normalizedParentStepId = String(parentStepId || "").trim();
+                if (!normalizedParentStepId) {
+                    if (!attachedNodeIds.has(node.nodeId)) {
+                        roots.push(node);
+                        attachedNodeIds.add(node.nodeId);
+                    }
+                    return;
+                }
+                const parentNode = ensureStepNode(normalizedParentStepId, { title: normalizedParentStepId, kind: "process", status: "running" });
+                if (!parentNode || parentNode.nodeId === node.nodeId) {
+                    if (!attachedNodeIds.has(node.nodeId)) {
+                        roots.push(node);
+                        attachedNodeIds.add(node.nodeId);
+                    }
+                    return;
+                }
+                const existingChild = parentNode.children.some((item) => item && item.nodeId === node.nodeId);
+                if (!existingChild) {
+                    parentNode.children.push(node);
+                }
+                if (!attachedNodeIds.has(parentNode.nodeId)) {
+                    roots.push(parentNode);
+                    attachedNodeIds.add(parentNode.nodeId);
+                }
+            };
+
+            eventList.forEach((event, index) => {
+                if (!event || typeof event !== "object") {
+                    return;
+                }
+                const stepId = extractEventStepId(event);
+                const parentStepId = extractEventParentStepId(event);
+                const eventStatus = normalizeEventStatus(event.status);
+                if (!stepId) {
+                    const leafNode = {
+                        nodeType: "event",
+                        nodeId: `event:${String(event.event_id || index)}`,
+                        stepId: "",
+                        title: String(event.title || "步骤"),
+                        kind: String(event.kind || "process"),
+                        status: eventStatus,
+                        event,
+                        children: [],
+                    };
+                    attachNode(leafNode, parentStepId);
+                    return;
+                }
+                const stepNode = ensureStepNode(stepId, event);
+                stepNode.events.push(event);
+                stepNode.kind = String(event.kind || stepNode.kind || "process");
+                stepNode.status = normalizeNodeStatus(stepNode.status, eventStatus);
+                if (!stepNode.startEvent && isLikelyStartEvent(event)) {
+                    stepNode.startEvent = event;
+                }
+                if (isLikelyEndEvent(event)) {
+                    stepNode.endEvent = event;
+                }
+                if (String(stepNode.title || "") === String(stepId)) {
+                    stepNode.title = String(event.title || stepNode.title || stepId);
+                }
+                attachNode(stepNode, parentStepId);
+            });
+
+            nodeByStepId.forEach((node) => {
+                if (!attachedNodeIds.has(node.nodeId)) {
+                    roots.push(node);
+                    attachedNodeIds.add(node.nodeId);
+                }
+            });
+            return roots;
+        };
+
+        const renderTraceEventLeaf = function (event, orderPrefix, depth, oldOpenKeys, savedOpenKeys, leafIndex) {
+            const inputHtml = formatDataForHtml(event.input);
+            const outputHtml = formatDataForHtml(event.output);
+            const errorHtml = formatDataForHtml(event.error);
+            const openKey = buildEventOpenKey(event, leafIndex);
+            const shouldOpen = oldOpenKeys.has(openKey) || savedOpenKeys.has(openKey);
+            return `
+                <details class="process-trace-step is-node-event is-depth-${Math.min(depth, 4)}" data-event-open-key="${toHtml(openKey)}" ${shouldOpen ? "open" : ""}>
+                    <summary>${toHtml(orderPrefix)}${toHtml(event.title || "步骤")} · ${toHtml(normalizeEventStatus(event.status))}${event.ts ? ` · ${toHtml(event.ts)}` : ""} · ${toHtml(formatEventKindLabel(event.kind))}${normalizeTokenUsage(event.token_usage) ? ` · Token ${normalizeTokenUsage(event.token_usage).total_tokens}` : ""}</summary>
+                    ${event.kind ? `<div class="process-trace-block"><strong>类型：</strong>${toHtml(formatEventKindLabel(event.kind))}</div>` : ""}
+                    ${normalizeTokenUsage(event.token_usage) ? `<div class="process-trace-block"><strong>Token：</strong>${toHtml(formatTokenUsageLabel(event.token_usage).replace("Token: ", ""))}</div>` : ""}
+                    ${inputHtml ? `<div class="process-trace-block"><strong>输入：</strong><pre>${inputHtml}</pre></div>` : ""}
+                    ${outputHtml ? `<div class="process-trace-block"><strong>输出：</strong><pre>${outputHtml}</pre></div>` : ""}
+                    ${errorHtml ? `<div class="process-trace-block"><strong>错误：</strong><pre>${errorHtml}</pre></div>` : ""}
+                </details>
+            `;
+        };
+
+        const renderTraceNode = function (node, depth, orderPrefix, oldOpenKeys, savedOpenKeys, pathSeed) {
+            if (!node || typeof node !== "object") {
+                return "";
+            }
+            if (node.nodeType === "event") {
+                return renderTraceEventLeaf(
+                    node.event && typeof node.event === "object" ? node.event : {},
+                    `${orderPrefix}`,
+                    depth,
+                    oldOpenKeys,
+                    savedOpenKeys,
+                    pathSeed
+                );
+            }
+            const startEvent = node.startEvent && typeof node.startEvent === "object" ? node.startEvent : null;
+            const endEvent = node.endEvent && typeof node.endEvent === "object" ? node.endEvent : null;
+            const effectiveStatus = normalizeNodeStatus(
+                node.status,
+                endEvent ? endEvent.status : (startEvent ? startEvent.status : node.status)
+            );
+            const displayTokenUsage = normalizeTokenUsage(
+                (endEvent && endEvent.token_usage)
+                || (startEvent && startEvent.token_usage)
+                || {}
+            );
+            const finishedAtText = String((endEvent && endEvent.ts) || "").trim();
+            const startedAtText = String((startEvent && startEvent.ts) || "").trim();
+            const nodeOpenKey = buildNodeOpenKey(node, pathSeed, depth);
+            const shouldOpen = oldOpenKeys.has(nodeOpenKey) || savedOpenKeys.has(nodeOpenKey);
+            const stepEvents = Array.isArray(node.events) ? node.events : [];
+            const startEventId = startEvent ? String(startEvent.event_id || "") : "";
+            const endEventId = endEvent ? String(endEvent.event_id || "") : "";
+            const innerLeafEvents = stepEvents.filter((item) => {
+                if (!item || typeof item !== "object") {
+                    return false;
+                }
+                const itemId = String(item.event_id || "");
+                if (itemId && (itemId === startEventId || itemId === endEventId)) {
+                    return false;
+                }
+                return true;
+            });
+            const childNodes = Array.isArray(node.children) ? node.children : [];
+            const renderedChildren = [];
+            childNodes.forEach((child, index) => {
+                renderedChildren.push(
+                    renderTraceNode(
+                        child,
+                        depth + 1,
+                        `${orderPrefix}${index + 1}.`,
+                        oldOpenKeys,
+                        savedOpenKeys,
+                        `${pathSeed}:${index}`
+                    )
+                );
+            });
+            innerLeafEvents.forEach((event, index) => {
+                renderedChildren.push(
+                    renderTraceEventLeaf(
+                        event,
+                        `${orderPrefix}${childNodes.length + index + 1}. `,
+                        depth + 1,
+                        oldOpenKeys,
+                        savedOpenKeys,
+                        `${pathSeed}:leaf:${index}`
+                    )
+                );
+            });
+            return `
+                <details class="process-trace-step is-node-step is-depth-${Math.min(depth, 4)}" data-event-open-key="${toHtml(nodeOpenKey)}" ${shouldOpen ? "open" : ""}>
+                    <summary>${toHtml(orderPrefix)}${toHtml(node.title || node.stepId || "步骤")} · ${toHtml(effectiveStatus)}${finishedAtText ? ` · 完成时间 ${toHtml(finishedAtText)}` : (startedAtText ? ` · 开始时间 ${toHtml(startedAtText)}` : "")} · ${toHtml(formatEventKindLabel(node.kind))}${displayTokenUsage ? ` · Token ${displayTokenUsage.total_tokens}` : ""}</summary>
+                    ${node.kind ? `<div class="process-trace-block"><strong>类型：</strong>${toHtml(formatEventKindLabel(node.kind))}</div>` : ""}
+                    ${startEvent ? `<div class="process-trace-block"><strong>开始：</strong>${toHtml(startEvent.title || "开始")}${startEvent.ts ? ` · ${toHtml(startEvent.ts)}` : ""}</div>` : ""}
+                    ${endEvent ? `<div class="process-trace-block"><strong>结束：</strong>${toHtml(endEvent.title || "结束")} · ${toHtml(normalizeEventStatus(endEvent.status))}${endEvent.ts ? ` · ${toHtml(endEvent.ts)}` : ""}</div>` : ""}
+                    ${displayTokenUsage ? `<div class="process-trace-block"><strong>Token：</strong>${toHtml(formatTokenUsageLabel(displayTokenUsage).replace("Token: ", ""))}</div>` : ""}
+                    ${renderedChildren.join("")}
+                </details>
+            `;
         };
 
         const persistTraceOpenKeys = function (container) {
@@ -1054,23 +1445,10 @@
             );
             const savedTraceOpenKeys = readUiState().traceOpenKeys;
             const savedOpenKeys = new Set(Array.isArray(savedTraceOpenKeys) ? savedTraceOpenKeys : []);
-            const itemHtml = eventList.map((event, index) => {
-                const inputHtml = formatDataForHtml(event.input);
-                const outputHtml = formatDataForHtml(event.output);
-                const errorHtml = formatDataForHtml(event.error);
-                const openKey = buildEventOpenKey(event, index);
-                const shouldOpen = oldOpenKeys.has(openKey) || savedOpenKeys.has(openKey);
-                return `
-                    <details class="process-trace-step" data-event-open-key="${toHtml(openKey)}" ${shouldOpen ? "open" : ""}>
-                        <summary>${index + 1}. ${toHtml(event.title || "步骤")} · ${toHtml(event.status || "success")}${event.ts ? ` · ${toHtml(event.ts)}` : ""} · ${toHtml(formatEventKindLabel(event.kind))}${normalizeTokenUsage(event.token_usage) ? ` · Token ${normalizeTokenUsage(event.token_usage).total_tokens}` : ""}</summary>
-                        ${event.kind ? `<div class="process-trace-block"><strong>类型：</strong>${toHtml(formatEventKindLabel(event.kind))}</div>` : ""}
-                        ${normalizeTokenUsage(event.token_usage) ? `<div class="process-trace-block"><strong>Token：</strong>${toHtml(formatTokenUsageLabel(event.token_usage).replace("Token: ", ""))}</div>` : ""}
-                        ${inputHtml ? `<div class="process-trace-block"><strong>输入：</strong><pre>${inputHtml}</pre></div>` : ""}
-                        ${outputHtml ? `<div class="process-trace-block"><strong>输出：</strong><pre>${outputHtml}</pre></div>` : ""}
-                        ${errorHtml ? `<div class="process-trace-block"><strong>错误：</strong><pre>${errorHtml}</pre></div>` : ""}
-                    </details>
-                `;
-            }).join("");
+            const traceTree = buildProcessTraceTreeFromEvents(eventList);
+            const itemHtml = traceTree.map((node, index) => (
+                renderTraceNode(node, 0, `${index + 1}. `, oldOpenKeys, savedOpenKeys, String(index))
+            )).join("");
             container.innerHTML = itemHtml;
             container.querySelectorAll("details.process-trace-step").forEach((detailsNode) => {
                 detailsNode.addEventListener("toggle", function () {
