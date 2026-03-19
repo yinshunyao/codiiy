@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+
+{% block title %}工具 API 测试{% endblock %}
+
+{% block content %}
+<style>
+    .app-shell-tool-test {
+        grid-template-columns: 260px 1fr;
+    }
+    .app-shell-tool-test .main-panel {
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+    .test-result-box {
+        margin: 8px 0 0;
+        max-height: 360px;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        background: var(--panel-2);
+    }
+    .test-result-box pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    {% include "collector/partials/sidebar_menu_styles.css" %}
+</style>
+
+<div class="app-shell app-shell-tool-test">
+    <aside class="sidebar sidebar-menu">
+        {% include "collector/partials/sidebar_menu.html" %}
+    </aside>
+
+    <main class="main-panel">
+        <div class="top-actions">
+            <div class="top-actions-left">
+                <span class="chip">工具集：{{ toolset_key }}</span>
+                <span class="chip">方法：{{ tool_function_name }}</span>
+            </div>
+            <div class="top-actions-right">
+                <a class="chip" href="{% url 'toolset_list' %}">返回工具集列表</a>
+            </div>
+        </div>
+
+        <section class="panel" style="margin-bottom: 12px;">
+            <div><strong>方法选择</strong></div>
+            <form method="get" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+                <select name="function_name">
+                    {% for item in tool_function_items %}
+                    <option value="{{ item.name }}" {% if item.name == tool_function_name %}selected{% endif %}>
+                        {{ item.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <button type="submit">切换方法</button>
+            </form>
+            <div class="meta" style="margin-top: 6px;">
+                说明：{{ tool_function_item.description|default:"无描述" }}
+            </div>
+            <div class="meta" style="margin-top: 4px;">
+                调用路径：<code>tools.{{ toolset_key }}.{{ tool_function_name }}</code>
+            </div>
+        </section>
+
+        <section class="panel" style="margin-bottom: 12px;">
+            <div><strong>参数输入</strong></div>
+            <form method="post" style="margin-top: 10px;" id="tool-test-form">
+                {% csrf_token %}
+                <input type="hidden" name="function_name" value="{{ tool_function_name }}">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr>
+                            <th style="text-align: left; border-bottom: 1px solid var(--line); padding: 8px;">参数</th>
+                            <th style="text-align: left; border-bottom: 1px solid var(--line); padding: 8px;">值</th>
+                            <th style="text-align: left; border-bottom: 1px solid var(--line); padding: 8px;">说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in demo_schema_rows %}
+                        <tr>
+                            <td style="padding: 8px; border-bottom: 1px solid var(--line); white-space: nowrap;">
+                                <code>{{ row.name }}</code>
+                                <span class="chip">{{ row.value_type }}</span>
+                                {% if row.required %}<span class="chip">必填</span>{% endif %}
+                                {% if row.sensitive %}<span class="chip">敏感</span>{% endif %}
+                            </td>
+                            <td style="padding: 8px; border-bottom: 1px solid var(--line);">
+                                <input
+                                    type="{% if row.sensitive %}password{% else %}text{% endif %}"
+                                    name="param__{{ row.name }}"
+                                    value="{{ row.value }}"
+                                    {% if row.required %}required{% endif %}
+                                    style="width: 100%;"
+                                >
+                            </td>
+                            <td style="padding: 8px; border-bottom: 1px solid var(--line);">
+                                <span class="meta">{{ row.description|default:"-" }}</span>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="3" style="padding: 8px;">该方法无需参数，可直接执行测试。</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <button
+                    type="submit"
+                    id="tool-test-submit-btn"
+                    {% if api_test_task_running %}disabled{% endif %}
+                >
+                    {% if api_test_task_running %}正在测试中...{% else %}执行测试{% endif %}
+                </button>
+            </form>
+            <div class="meta" id="tool-test-status-text" style="margin-top: 8px;">
+                {% if api_test_task_running %}
+                    当前任务正在执行，请稍候...
+                {% elif api_test_task_done %}
+                    当前任务已完成，可再次发起测试。
+                {% else %}
+                    点击“执行测试”后将异步运行，不阻塞页面。
+                {% endif %}
+            </div>
+        </section>
+
+        {% if call_result %}
+        <section class="panel" style="margin-bottom: 12px;">
+            <div><strong>本次调用入参</strong></div>
+            <div class="test-result-box">
+                <pre>{{ call_kwargs_text }}</pre>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div><strong>测试结果</strong></div>
+            <div class="test-result-box">
+                <pre>{{ call_result_text }}</pre>
+            </div>
+        </section>
+        {% endif %}
+    </main>
+</div>
+
+<script>
+    (function bindAsyncTestStatus() {
+        const submitBtn = document.getElementById("tool-test-submit-btn");
+        const testForm = document.getElementById("tool-test-form");
+        const statusText = document.getElementById("tool-test-status-text");
+        const statusUrl = "{{ api_test_status_url|default:'' }}";
+        if (testForm && submitBtn) {
+            testForm.addEventListener("submit", function () {
+                submitBtn.disabled = true;
+                submitBtn.textContent = "正在测试中...";
+                if (statusText) {
+                    statusText.textContent = "当前任务正在执行，请稍候...";
+                }
+            });
+        }
+        if (!statusUrl) {
+            return;
+        }
+
+        const poll = function () {
+            fetch(statusUrl, { headers: { "X-Requested-With": "XMLHttpRequest" } })
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("状态查询失败");
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    if (!submitBtn || !statusText) {
+                        return;
+                    }
+                    if (data.is_done) {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = "执行测试";
+                        statusText.textContent = "当前任务已完成，可再次发起测试。";
+                        window.location.reload();
+                        return;
+                    }
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = "正在测试中...";
+                    statusText.textContent = data.status_text || "当前任务正在执行，请稍候...";
+                    window.setTimeout(poll, 1500);
+                })
+                .catch(function () {
+                    if (!submitBtn || !statusText) {
+                        return;
+                    }
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = "执行测试";
+                    statusText.textContent = "状态查询失败，可手动刷新页面查看任务结果。";
+                });
+        };
+
+        if ({% if api_test_task_running %}true{% else %}false{% endif %}) {
+            window.setTimeout(poll, 800);
+        }
+    })();
+    {% include "collector/partials/sidebar_menu_script.html" %}
+</script>
+{% endblock %}
