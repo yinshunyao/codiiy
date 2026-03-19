@@ -107,6 +107,7 @@
                     <div class="toolset-item-header">
                         <div><strong>{{ item.name }}</strong></div>
                         <div class="toolset-item-actions">
+                        <a class="chip" href="{% url 'tool_function_test' item.name %}">测试</a>
                         <form method="post" action="{% url 'toolset_list' %}" style="margin: 0;">
                             {% csrf_token %}
                             <input type="hidden" name="action" value="toggle_toolset_enabled">

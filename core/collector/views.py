@@ -1,6 +1,7 @@
 import os
 import io
 import importlib
+import inspect
 import ast
 import json
 import platform
@@ -44,6 +45,7 @@ from tools.manager import (
     list_toolset_source_options,
     set_toolset_enabled,
 )
+from framework.capability_dispatcher import CapabilityDispatcher
 
 from .forms import (
     ChatMessageForm,
@@ -59,6 +61,7 @@ from .models import (
     ComponentSystemPermissionGrant,
     ComponentSystemParamConfig,
     ControlApiTestTask,
+    ToolApiTestTask,
     LLMApiConfig,
     LLMModel,
     LLMProvider,
@@ -2628,7 +2631,7 @@ def _extract_legacy_interaction_request(raw_text: str):
         if value and value not in normalized_keys:
             normalized_keys.append(value)
     option_label_map = {
-        "install": "安装 cursor-cli 后重试",
+        "install": "安装 agent 命令后重试",
         "relax": "放宽约束并继续执行",
         "retry": "立即重试当前路径",
     }
@@ -3958,6 +3961,161 @@ def _build_toolset_page_context(
         }
     )
     return context
+
+
+def _load_toolset_instance(toolset_key: str):
+    dispatcher = CapabilityDispatcher(auto_install=False)
+    instance = dispatcher._get_tool_instance(toolset_key)  # noqa: SLF001 - 复用现有调度器实例管理能力
+    return dispatcher, instance
+
+
+def _infer_tool_param_value_type(annotation, default_value):
+    if annotation in {bool, int, float, dict, list}:
+        mapping = {bool: "bool", int: "int", float: "float", dict: "json", list: "json"}
+        return mapping.get(annotation, "string")
+
+    annotation_text = str(annotation or "").lower()
+    if "bool" in annotation_text:
+        return "bool"
+    if "int" in annotation_text:
+        return "int"
+    if "float" in annotation_text:
+        return "float"
+    if any(token in annotation_text for token in ("dict", "list", "json", "mapping", "sequence")):
+        return "json"
+
+    if default_value is not inspect._empty:
+        if isinstance(default_value, bool):
+            return "bool"
+        if isinstance(default_value, int) and not isinstance(default_value, bool):
+            return "int"
+        if isinstance(default_value, float):
+            return "float"
+        if isinstance(default_value, (dict, list)):
+            return "json"
+    return "string"
+
+
+def _build_tool_method_param_fields(method):
+    fields = []
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return fields
+
+    for parameter in signature.parameters.values():
+        if parameter.kind not in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            continue
+        if parameter.name in {"self", "cls"}:
+            continue
+
+        default_value = parameter.default
+        required = default_value is inspect._empty
+        value_type = _infer_tool_param_value_type(parameter.annotation, default_value)
+        sensitive = any(
+            token in parameter.name.lower()
+            for token in ("password", "secret", "token", "api_key", "apikey")
+        )
+        fields.append(
+            {
+                "name": parameter.name,
+                "required": bool(required),
+                "sensitive": bool(sensitive),
+                "description": f"参数 {parameter.name}",
+                "default": "" if required else default_value,
+                "value_type": value_type,
+            }
+        )
+    return fields
+
+
+def _list_tool_function_items(toolset_key: str):
+    _, tool_instance = _load_toolset_instance(toolset_key)
+    function_items = []
+    for method_name in sorted(dir(tool_instance)):
+        if method_name.startswith("_"):
+            continue
+        method = getattr(tool_instance, method_name, None)
+        if not callable(method):
+            continue
+        param_fields = _build_tool_method_param_fields(method)
+        method_doc = inspect.getdoc(method) or ""
+        description = method_doc.splitlines()[0].strip() if method_doc else ""
+        function_items.append(
+            {
+                "name": method_name,
+                "description": description,
+                "demo_param_schema": {
+                    "enabled": True,
+                    "fields": param_fields,
+                },
+            }
+        )
+    return function_items
+
+
+def _build_tool_api_test_status_payload(task: ToolApiTestTask):
+    status_text_map = {
+        ToolApiTestTask.STATUS_PENDING: "等待中",
+        ToolApiTestTask.STATUS_RUNNING: "正在测试中",
+        ToolApiTestTask.STATUS_SUCCESS: "执行成功",
+        ToolApiTestTask.STATUS_FAILED: "执行失败",
+    }
+    is_done = task.status in {ToolApiTestTask.STATUS_SUCCESS, ToolApiTestTask.STATUS_FAILED}
+    return {
+        "task_id": task.id,
+        "status": task.status,
+        "status_text": status_text_map.get(task.status, task.status),
+        "is_done": is_done,
+        "call_kwargs_text": task.call_kwargs_text if is_done else "",
+        "call_result_text": task.call_result_text if is_done else "",
+        "error_message": task.error_message if task.status == ToolApiTestTask.STATUS_FAILED else "",
+    }
+
+
+def _run_tool_api_test_task(task_id: int, function_path: str, call_kwargs):
+    close_old_connections()
+    try:
+        task = ToolApiTestTask.objects.filter(id=task_id).first()
+        if not task:
+            return
+
+        task.status = ToolApiTestTask.STATUS_RUNNING
+        task.started_at = timezone.now()
+        task.save(update_fields=["status", "started_at", "updated_at"])
+
+        dispatcher = CapabilityDispatcher(auto_install=False)
+        try:
+            call_result = dispatcher.call_tool_function(function_path=function_path, kwargs=call_kwargs)
+        except Exception as exc:
+            call_result = {"success": False, "error": str(exc)}
+
+        task.call_kwargs_text = _safe_json_text(_mask_sensitive_data(call_kwargs))
+        task.call_result_text = _safe_json_text(_mask_sensitive_data(call_result))
+        task.error_message = "" if call_result.get("success") else str(call_result.get("error", "")).strip()
+        task.status = ToolApiTestTask.STATUS_SUCCESS if call_result.get("success") else ToolApiTestTask.STATUS_FAILED
+        task.finished_at = timezone.now()
+        task.save(
+            update_fields=[
+                "call_kwargs_text",
+                "call_result_text",
+                "error_message",
+                "status",
+                "finished_at",
+                "updated_at",
+            ]
+        )
+    except Exception:
+        ToolApiTestTask.objects.filter(id=task_id).update(
+            status=ToolApiTestTask.STATUS_FAILED,
+            error_message="异步测试任务执行异常。",
+            finished_at=timezone.now(),
+        )
+    finally:
+        close_old_connections()
 
 
 def _read_report_preview(report_path: str, max_chars: int = 12000) -> str:
@@ -5482,6 +5640,138 @@ def toolset_list(request):
         return redirect(redirect_url)
 
     return render(request, "collector/toolset_list.html", context)
+
+
+@login_required
+def tool_function_test(request, toolset_key):
+    normalized_toolset_key = str(toolset_key or "").strip()
+    if not normalized_toolset_key:
+        messages.error(request, "缺少工具集标识。")
+        return redirect("toolset_list")
+
+    toolset_items = list_toolsets(keyword="", selected_os="all", selected_source="all")
+    toolset_item_map = {str(item.get("name") or "").strip(): item for item in toolset_items}
+    target_toolset = toolset_item_map.get(normalized_toolset_key)
+    if not target_toolset:
+        messages.error(request, f"未找到工具集：{normalized_toolset_key}")
+        return redirect("toolset_list")
+
+    try:
+        function_items = _list_tool_function_items(normalized_toolset_key)
+    except Exception as exc:
+        messages.error(request, f"工具方法加载失败：{exc}")
+        return redirect("toolset_list")
+    if not function_items:
+        messages.error(request, f"工具集没有可测试方法：{normalized_toolset_key}")
+        return redirect("toolset_list")
+
+    selected_function_name = str(
+        request.POST.get("function_name", "")
+        if request.method == "POST"
+        else request.GET.get("function_name", "")
+    ).strip()
+    function_item_map = {str(item.get("name") or "").strip(): item for item in function_items}
+    if not selected_function_name or selected_function_name not in function_item_map:
+        selected_function_name = str(function_items[0].get("name") or "").strip()
+    function_item = function_item_map.get(selected_function_name) or function_items[0]
+    demo_schema = _extract_demo_param_schema(function_item)
+
+    submitted_params = {}
+    call_kwargs = {}
+    call_result = None
+    call_result_text = ""
+    call_kwargs_text = ""
+    task_id_raw = str(request.GET.get("task_id", "")).strip()
+    active_task = None
+    if task_id_raw.isdigit():
+        active_task = ToolApiTestTask.objects.filter(id=int(task_id_raw), created_by=request.user).first()
+
+    if request.method == "POST":
+        for field in demo_schema["fields"]:
+            name = field.get("name")
+            if not name:
+                continue
+            submitted_params[name] = request.POST.get(f"param__{name}", "").strip()
+
+        has_error = False
+        for field in demo_schema["fields"]:
+            name = field.get("name")
+            if not name:
+                continue
+            ok, parsed_value, error = _parse_demo_param_value(field, submitted_params.get(name, ""))
+            if not ok:
+                messages.error(request, error)
+                has_error = True
+                continue
+            if parsed_value is not None:
+                call_kwargs[name] = parsed_value
+
+        if not has_error:
+            task = ToolApiTestTask.objects.create(
+                created_by=request.user,
+                toolset_key=normalized_toolset_key,
+                function_name=selected_function_name,
+                status=ToolApiTestTask.STATUS_PENDING,
+            )
+            function_path = f"tools.{normalized_toolset_key}.{selected_function_name}"
+            try:
+                worker = threading.Thread(
+                    target=_run_tool_api_test_task,
+                    args=(task.id, function_path, call_kwargs),
+                    daemon=True,
+                )
+                worker.start()
+                messages.success(request, "工具测试任务已启动，正在后台执行。")
+            except Exception as exc:
+                task.status = ToolApiTestTask.STATUS_FAILED
+                task.error_message = f"启动测试任务失败：{exc}"
+                task.finished_at = timezone.now()
+                task.save(update_fields=["status", "error_message", "finished_at", "updated_at"])
+                messages.error(request, task.error_message)
+            redirect_url = reverse("tool_function_test", kwargs={"toolset_key": normalized_toolset_key})
+            redirect_url = f"{redirect_url}?{urlencode({'function_name': selected_function_name, 'task_id': task.id})}"
+            return redirect(redirect_url)
+
+    demo_rows = _build_demo_schema_value_rows(demo_schema["fields"], submitted_params)
+    if active_task:
+        task_payload = _build_tool_api_test_status_payload(active_task)
+        if task_payload["is_done"]:
+            call_result = {"success": active_task.status == ToolApiTestTask.STATUS_SUCCESS}
+            call_kwargs_text = task_payload["call_kwargs_text"]
+            call_result_text = task_payload["call_result_text"]
+
+    context = _build_chat_context(request)
+    context.update(
+        {
+            "current_nav": "toolset_list",
+            "toolset_item": target_toolset,
+            "toolset_key": normalized_toolset_key,
+            "tool_function_items": function_items,
+            "tool_function_name": selected_function_name,
+            "tool_function_item": function_item,
+            "demo_schema_rows": demo_rows,
+            "call_result": call_result,
+            "call_result_text": call_result_text,
+            "call_kwargs_text": call_kwargs_text,
+            "api_test_task": active_task,
+            "api_test_task_running": bool(
+                active_task and active_task.status in {ToolApiTestTask.STATUS_PENDING, ToolApiTestTask.STATUS_RUNNING}
+            ),
+            "api_test_task_done": bool(
+                active_task and active_task.status in {ToolApiTestTask.STATUS_SUCCESS, ToolApiTestTask.STATUS_FAILED}
+            ),
+            "api_test_status_url": reverse("tool_function_test_task_status", kwargs={"task_id": active_task.id})
+            if active_task
+            else "",
+        }
+    )
+    return render(request, "collector/tool_function_test.html", context)
+
+
+@login_required
+def tool_function_test_task_status(request, task_id):
+    task = get_object_or_404(ToolApiTestTask, id=task_id, created_by=request.user)
+    return JsonResponse(_build_tool_api_test_status_payload(task))
 
 
 @login_required

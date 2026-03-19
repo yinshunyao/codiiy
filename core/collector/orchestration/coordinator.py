@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 class Coordinator:
     """按计划执行多智能体步骤并输出最终答案。"""
+    _MAX_TOOL_ATTEMPTS_DEFAULT = 3
+    _MAX_TOOL_ATTEMPTS_HARD_LIMIT = 5
 
     def __init__(self):
         self.mindforge_runner = MindforgeRunner()
@@ -53,6 +55,7 @@ class Coordinator:
         system_prompt = str(runtime_context.get("system_prompt") or "").strip()
         capability_search_mode = str(runtime_context.get("capability_search_mode") or "hybrid").strip() or "hybrid"
         mindforge_strategy = str(runtime_context.get("mindforge_strategy") or "auto").strip() or "auto"
+        tool_max_attempts = self._normalize_tool_max_attempts(runtime_context.get("tool_max_attempts"))
         callback_candidate = runtime_context.get("event_callback")
         self._event_callback = callback_candidate if callable(callback_candidate) else None
         stop_checker = runtime_context.get("stop_checker")
@@ -159,6 +162,7 @@ class Coordinator:
                         allowed_control_components=allowed_control_components,
                         allowed_control_functions=allowed_control_functions,
                         allowed_toolsets=allowed_toolsets,
+                        max_attempts=tool_max_attempts,
                         stop_checker=stop_checker,
                     )
                     error = str((output or {}).get("error") or "")
@@ -310,8 +314,7 @@ class Coordinator:
                                 )
                             )
                             need_replan = bool(signal.get("need_replan"))
-                            has_alternative = bool(signal.get("has_alternative"))
-                            if need_replan and has_alternative:
+                            if need_replan:
                                 replan_used = True
                                 replan_start_ms = now_ms()
                                 signal_reason = str(signal.get("reason") or "").strip()
@@ -479,6 +482,7 @@ class Coordinator:
         allowed_control_components: List[str],
         allowed_control_functions: List[str],
         allowed_toolsets: List[str],
+        max_attempts: int,
         stop_checker=None,
     ):
         raw_primary = str(step.target or "").strip()
@@ -488,9 +492,9 @@ class Coordinator:
         attempt_events: List[Dict] = []
         trace_events: List[Dict] = []
         last_output: Dict = {}
-        max_attempts = min(max(1, len(ordered_targets)), 3)
+        effective_max_attempts = min(max(1, len(ordered_targets)), int(max_attempts))
 
-        for attempt_idx, function_path in enumerate(ordered_targets[:max_attempts], start=1):
+        for attempt_idx, function_path in enumerate(ordered_targets[:effective_max_attempts], start=1):
             self._raise_if_stop_requested(stop_checker)
             attempt_start_ms = now_ms()
             trace_events.append(
@@ -599,8 +603,30 @@ class Coordinator:
             "not in direct",
             "必须以 tools.",
             "must start with tools.",
+            "参数缺失",
+            "参数错误",
+            "参数校验",
+            "参数结构",
+            "required positional argument",
+            "missing required",
+            "invalid kwargs",
+            "invalid argument",
+            "validation error",
+            "schema",
+            "json decode",
+            "expects argument",
+            "unexpected keyword argument",
         ]
         return not any(signal in text for signal in hard_stop_signals)
+
+    @classmethod
+    def _normalize_tool_max_attempts(cls, raw_value) -> int:
+        try:
+            numeric = int(raw_value)
+        except Exception:
+            numeric = cls._MAX_TOOL_ATTEMPTS_DEFAULT
+        numeric = max(1, numeric)
+        return min(numeric, cls._MAX_TOOL_ATTEMPTS_HARD_LIMIT)
 
     @staticmethod
     def _build_replan_query(user_query: str, failed_function_path: str, tool_error: str) -> str:
@@ -756,12 +782,13 @@ class Coordinator:
         signal_reason: str,
         alternative_plan: str,
     ) -> str:
+        alternative_hint = alternative_plan or "（未提供显式替代方案，请先基于未达标原因自主补全可执行步骤并继续执行）"
         return (
             f"{user_query}\n\n"
             "补充上下文：总结阶段判定本轮执行未达成目标，请立即重规划并继续执行。\n"
             f"总结结论：{summarize_text}\n"
             f"未达标原因：{signal_reason}\n"
-            f"候选替代方案：{alternative_plan}\n"
+            f"候选替代方案：{alternative_hint}\n"
             "要求：必须补齐缺失关键执行步骤；避免重复失败路径；输出可直接执行的结果。"
         )
 

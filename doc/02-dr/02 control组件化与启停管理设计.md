@@ -336,29 +336,29 @@
    - 文件类型仅允许 `.zip`；
    - 导出/导入失败需返回可读错误，不返回 500。
 
-### 5.16 工具集新增 macOS 终端对象工具（基于 ComponentCallTool）
-为满足“在工具集层获得可复用终端对象并支持输入输出互操作”的需求，新增以下规则：
+### 5.16 工具集新增 macOS 终端黑盒工具（基于 ComponentCallTool）
+为满足“降低大模型调用复杂度，统一单函数命令执行”的需求，新增以下规则：
 1. 工具目录与定位：
    - 在 `tools` 下新增独立工具目录 `tools/macos_terminal_tool`；
-   - 该工具负责“对象化会话管理与调用编排”，不重复实现 shell 子进程逻辑。
+   - 该工具对外提供黑盒单函数入口，不重复实现 shell 子进程逻辑。
 2. 调用链路约束：
    - 工具调用 `component.handle.create_macos_terminal_session`、`component.handle.run_macos_terminal_command`、`component.handle.get_macos_terminal_output`、`component.handle.close_macos_terminal_session` 时，必须统一通过 `tools/component_call_tool.ComponentCallTool.control_call`；
    - 禁止在工具内直接导入 `component` 代码。
-3. 终端对象模型：
-   - 工具层提供“终端对象”抽象，至少包含：对象 ID、`session_id`、当前输出偏移量、创建参数（`cwd`、`shell_mode`）；
-   - 同一对象可多次输入命令并复用会话上下文，支持 `cd` 后继续执行后续命令。
-4. 输入输出互操作能力：
-   - 支持输入命令并同步返回本次执行输出（含退出码）；
-   - 支持按 offset 增量读取累计输出，便于轮询或流式消费；
-   - 支持对象级关闭，关闭后释放会话并禁止继续输入/读取。
+3. 对外接口约束（黑盒）：
+   - `MacosTerminalTool` 对外仅暴露 `run_command` 主入口；
+   - 入参以 `command` 为核心，允许可选执行参数（`cwd`、`shell_mode`、`timeout_seconds`）；
+   - 调用方无需感知会话创建、输出读取、会话关闭等生命周期细节。
+4. 内部复用约束：
+   - 对象化会话能力仅作为内部复用能力（供 `cursor_cli_tool` 等工具使用）；
+   - 不在工具集对外调用面暴露对象创建/读取/关闭等多步骤 API，避免大模型误用。
 5. 工具标识兼容解析：
    - ReAct/Auto 等策略在调用工具时，`action.tool` 允许使用三类标识：规范注册名（如 `macos_terminal_tool_run_command`）、函数路径（如 `tools.macos_terminal_tool.run_command`）、工具模块别名（如 `macos_terminal_tool`）；
    - 执行器需先按规范注册名匹配，未命中再按函数路径和模块别名做兼容解析；
    - 当别名匹配到多个函数时必须返回“别名不唯一”错误并附候选路径，禁止静默选择，避免误调用。
 6. 返回与异常约束：
    - 工具对外返回统一结构：成功 `success + data`，失败 `success + error`；
-   - 组件调用失败、会话不存在、对象不存在、平台不支持等场景需返回明确可读错误；
-   - 对象关闭失败需保留原始错误信息，避免静默吞错。
+   - 返回数据至少包含：`command`、`exit_code`、`stdout`、`stderr`；
+   - 组件调用失败、平台不支持、命令执行异常等场景需返回明确可读错误。
 7. 平台边界：
    - 工具层不绕过组件的平台校验；在非 macOS 环境调用时，按组件返回错误透传；
    - 工具 `README.md` 必须显式声明支持系统为 `macos`。
@@ -477,7 +477,7 @@
    - 会话对象复用底层终端对象，支持在同一 shell 上下文中连续调用 Cursor CLI；
    - 会话关闭后禁止继续调用，需返回明确错误。
 5. 交互调用能力：
-   - 支持“拼接命令参数调用 Cursor CLI”（`cursor <args>`）并返回结构化结果；
+   - 支持“拼接命令参数调用 Cursor CLI”（`agent <args>`）并返回结构化结果；
    - `call_cursor` 的参数契约以 `args` 为主，同时兼容历史调用入参 `command`（等价映射到 `args`），避免编排链路因参数名差异触发 `TypeError`；
    - 支持“基于 prompt 的调用快捷方法”，自动进行 shell 安全转义；
    - 支持可选执行前可用性检测（`command -v <cursor_binary>`）；

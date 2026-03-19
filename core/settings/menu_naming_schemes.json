@@ -1,0 +1,63 @@
+{
+  "default_scheme": "wuxia",
+  "schemes": {
+    "standard": {
+      "label": "标准中文",
+      "labels": {
+        "system_name": "codiiy平台",
+        "system_name_hint": "系统名称",
+        "chat_group": "聊天",
+        "chat_group_hint": "聊天",
+        "chat_main": "聊天",
+        "chat_main_hint": "主聊天会话",
+        "companion_management": "伙伴管理",
+        "companion_management_hint": "伙伴列表与配置",
+        "agent_group": "智能体（agents）",
+        "agent_group_hint": "智能体能力管理",
+        "toolset": "工具集",
+        "toolset_hint": "工具能力集合",
+        "rules": "规则（rules）",
+        "rules_hint": "系统规则",
+        "component_group": "组件",
+        "component_group_hint": "组件能力管理",
+        "model_group": "模型",
+        "settings_group": "设置"
+      },
+      "control_module_labels": {
+        "communicate": "沟通",
+        "observe": "观察",
+        "decide": "决策",
+        "handle": "操作"
+      }
+    },
+    "wuxia": {
+      "label": "武侠风",
+      "labels": {
+        "system_name": "开智枢",
+        "system_name_hint": "codiiy平台",
+        "chat_group": "江湖",
+        "chat_group_hint": "聊天",
+        "chat_main": "华山论剑",
+        "chat_main_hint": "聊天",
+        "companion_management": "侠谱",
+        "companion_management_hint": "伙伴管理",
+        "agent_group": "武库",
+        "agent_group_hint": "智能体（agents）",
+        "toolset": "兵刃",
+        "toolset_hint": "工具集",
+        "rules": "门规",
+        "rules_hint": "规则（rules）",
+        "component_group": "机枢",
+        "component_group_hint": "组件",
+        "model_group": "内功",
+        "settings_group": "行囊"
+      },
+      "control_module_labels": {
+        "communicate": "传音",
+        "observe": "望气",
+        "decide": "运筹",
+        "handle": "出招"
+      }
+    }
+  }
+}

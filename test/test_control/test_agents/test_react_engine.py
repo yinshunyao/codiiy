@@ -115,6 +115,39 @@ class ReActEngineTestCase(unittest.TestCase):
         self.assertIn("未知工具", observation)
         self.assertIn("工具别名不唯一", error)
 
+    def test_executor_should_return_data_when_tool_result_has_no_nested_result_field(self):
+        executor = ReActToolExecutor(
+            tools=[
+                ReActTool(
+                    name="macos_terminal_tool_run_command",
+                    function_path="tools.macos_terminal_tool.run_command",
+                    description="执行终端命令",
+                )
+            ]
+        )
+        with patch.object(
+            executor.component_tool,
+            "call_tool_function",
+            return_value={
+                "success": True,
+                "data": {
+                    "object_id": "obj-1",
+                    "session_id": "sess-1",
+                    "command": "df -h / /System/Volumes/Data",
+                    "exit_code": 0,
+                    "stdout": "Filesystem ...",
+                    "stderr": "",
+                },
+            },
+        ):
+            observation, error = executor.execute_tool(
+                tool_name="macos_terminal_tool_run_command",
+                kwargs={"command": "df -h / /System/Volumes/Data"},
+            )
+        self.assertEqual(error, "")
+        self.assertNotEqual(observation.strip(), "null")
+        self.assertIn('"command": "df -h / /System/Volumes/Data"', observation)
+
     def test_run_should_ignore_legacy_final_answer_and_use_observation(self):
         engine = self._build_engine(max_steps=3)
         model_outputs = [

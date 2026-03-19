@@ -1,5 +1,6 @@
 {
   "rule_reader": false,
   "coder": false,
-  "create_tool": false
+  "create_tool": false,
+  "cursor_cli_tool": false
 }

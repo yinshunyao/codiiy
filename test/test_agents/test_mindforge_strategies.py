@@ -293,6 +293,96 @@ class MindforgeStrategiesTestCase(unittest.TestCase):
         self.assertTrue(any("[auto route] choose_strategy" in text for text in thoughts))
         self.assertTrue(any("cot single pass" in text for text in thoughts))
 
+    @patch("agents.mindforge.auto_strategy.api.ReActMindforgeStrategy.run")
+    def test_auto_strategy_should_finish_directly_when_preheat_completed(
+        self,
+        mock_react_run,
+    ):
+        strategy = AutoMindforgeStrategy()
+        config = ReActEngineConfig(model="qwen-plus")
+        tools = [
+            ReActTool(
+                name="run_terminal",
+                function_path="tools.macos_terminal_tool.run_command",
+                description="执行终端命令",
+            )
+        ]
+        with patch.object(
+            strategy,
+            "_analyze_preheat_by_model",
+            return_value=(
+                {
+                    "is_completed": True,
+                    "answer": "预热已确认：当前磁盘剩余空间约 128GiB。",
+                    "next_strategy": "",
+                    "intent_type": "qa",
+                    "must_execute": False,
+                    "confidence": 0.9,
+                    "reason": "可直接回答",
+                },
+                "",
+            ),
+        ):
+            result = strategy.run(
+                user_query="当前磁盘剩余空间是多少",
+                tools=tools,
+                config=config,
+                system_prompt="你是助手",
+            )
+        self.assertTrue(result.success)
+        self.assertIn("128GiB", result.final_answer)
+        self.assertFalse(mock_react_run.called)
+        self.assertTrue(any("[auto preheat] assess_task" in str(item.thought or "") for item in result.steps))
+
+    @patch("agents.mindforge.auto_strategy.api.ReActMindforgeStrategy.run")
+    @patch("agents.mindforge.auto_strategy.api.CoTMindforgeStrategy.run")
+    def test_auto_strategy_should_follow_preheat_cot_strategy(
+        self,
+        mock_cot_run,
+        mock_react_run,
+    ):
+        strategy = AutoMindforgeStrategy()
+        config = ReActEngineConfig(model="qwen-plus")
+        tools = [
+            ReActTool(
+                name="read_file",
+                function_path="tools.file_operator_tool.read_file",
+                description="读取文件内容",
+            )
+        ]
+        mock_cot_run.return_value = ReActRunResult(
+            success=True,
+            final_answer="这是 CoT 策略输出",
+            steps=[ReActStepRecord(step=1, thought="cot single pass")],
+        )
+        with patch.object(
+            strategy,
+            "_analyze_preheat_by_model",
+            return_value=(
+                {
+                    "is_completed": False,
+                    "answer": "",
+                    "next_strategy": "cot",
+                    "intent_type": "qa",
+                    "must_execute": False,
+                    "confidence": 0.8,
+                    "reason": "适合走 CoT",
+                },
+                "",
+            ),
+        ):
+            result = strategy.run(
+                user_query="解释一下该方案的思路",
+                tools=tools,
+                config=config,
+                system_prompt="你是助手",
+            )
+        self.assertTrue(result.success)
+        self.assertEqual(result.final_answer, "这是 CoT 策略输出")
+        self.assertTrue(mock_cot_run.called)
+        self.assertFalse(mock_react_run.called)
+        self.assertTrue(any("source=preheat" in str(item.observation or "") for item in result.steps))
+
     @patch("agents.mindforge.auto_strategy.api.CoTMindforgeStrategy.run")
     @patch("agents.mindforge.auto_strategy.api.ReActMindforgeStrategy.run")
     def test_auto_strategy_should_choose_react_for_action_with_general_tool_chain(

@@ -63,6 +63,16 @@ urlpatterns = [
     path("models/local/<int:config_id>/runtime/", views.local_llm_runtime_action, name="local_llm_runtime_action"),
     path("search/", views.capability_search, name="capability_search"),
     path("tools/sets/", views.toolset_list, name="toolset_list"),
+    path(
+        "tools/sets/<str:toolset_key>/test/",
+        views.tool_function_test,
+        name="tool_function_test",
+    ),
+    path(
+        "tools/sets/test-task/<int:task_id>/status/",
+        views.tool_function_test_task_status,
+        name="tool_function_test_task_status",
+    ),
     path("agents/<str:module_name>/", views.agent_item_list, name="agent_item_list"),
     path(
         "agents/<str:module_name>/upload/",

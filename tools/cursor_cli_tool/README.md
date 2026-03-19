@@ -5,9 +5,9 @@
 `CursorCliTool` 基于 `tools/macos_terminal_tool` 复用终端会话，提供 Cursor CLI 的会话化调用能力，用于将代码开发任务委托给 Cursor 执行。
 
 适用场景：
-1. 需要在固定 `cwd` 下连续调用 `cursor` 命令完成代码开发任务；
+1. 需要在固定 `cwd` 下连续调用 `agent` 命令完成代码开发任务；
 2. 需要统一封装 Cursor CLI 可用性检测、调用与错误格式；
-3. 需要通过 prompt 快捷方式执行 `cursor --print`；
+3. 需要通过 prompt 快捷方式执行 `agent --print`；
 4. 需要解析 `stream-json/jsonl` 输出并提取 `session_id`、token 用量与摘要信息。
 
 当前智能体可用性：
@@ -24,14 +24,14 @@
 
 ## API
 
-### `create_cursor_cli_session(cwd: str = "", shell_mode: str = "zsh", cursor_binary: str = "cursor", check_available: bool = True, check_timeout_seconds: float = 10.0) -> Dict`
+### `create_cursor_cli_session(cwd: str = "", shell_mode: str = "zsh", cursor_binary: str = "agent", check_available: bool = True, check_timeout_seconds: float = 10.0) -> Dict`
 
 | 参数 | 类型 | 默认值 | 说明 |
 |:---|:---|:---|:---|
 | `cwd` | `str` | `""` | 会话初始工作目录。 |
 | `shell_mode` | `str` | `"zsh"` | Shell 类型。 |
-| `cursor_binary` | `str` | `"cursor"` | Cursor CLI 可执行文件名或路径。 |
-| `check_available` | `bool` | `True` | 创建后是否立即检测 `cursor` 可用性。 |
+| `cursor_binary` | `str` | `"agent"` | Agent CLI 可执行文件名或路径。 |
+| `check_available` | `bool` | `True` | 创建后是否立即检测 `agent` 可用性。 |
 | `check_timeout_seconds` | `float` | `10.0` | 可用性检测超时时间。 |
 
 返回 `data` 字段：`object_id`、`cursor_binary`、`available`（按实现返回）。
@@ -50,7 +50,7 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |:---|:---|:---|:---|
 | `object_id` | `str` | 必填 | CLI 会话对象 ID。 |
-| `args` | `str` | `""` | 传给 `cursor` 的参数字符串。 |
+| `args` | `str` | `""` | 传给 `agent` 的参数字符串。 |
 | `command` | `str` | `""` | `args` 的兼容别名。 |
 | `timeout_seconds` | `float` | `120.0` | 命令执行超时时间。 |
 | `read_incremental_output` | `bool` | `False` | 是否增量读取输出。 |

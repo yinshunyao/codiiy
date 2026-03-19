@@ -96,7 +96,14 @@ class ReActToolExecutor:
             if not isinstance(call_result, dict) or not bool(call_result.get("success")):
                 return safe_json_dumps(call_result), str(call_result.get("error", "工具调用失败"))
             call_data = call_result.get("data", {})
-            result = call_data.get("result") if isinstance(call_data, dict) else call_data
+            # 兼容两种返回结构：
+            # 1) {"success": True, "data": {"result": ...}}
+            # 2) {"success": True, "data": ...}
+            # 避免在无 result 字段时把 observation 误写成 null。
+            if isinstance(call_data, dict) and "result" in call_data:
+                result = call_data.get("result")
+            else:
+                result = call_data
             return safe_json_dumps(result), ""
         except Exception as exc:
             return f"工具执行异常: {exc}", str(exc)

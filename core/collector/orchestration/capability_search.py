@@ -1,6 +1,7 @@
 import json
 import math
 import re
+import ast
 import threading
 import time
 import hashlib
@@ -22,26 +23,7 @@ _CACHE_RELATIVE_PATH = Path("data") / "database" / "capability_callable_index.js
 _ZVEC_COLLECTION_RELATIVE_PATH = Path("data") / "database" / "capability_callable_zvec"
 _ZVEC_META_RELATIVE_PATH = Path("data") / "database" / "capability_callable_zvec_meta.json"
 _DENSE_VECTOR_DIMENSION = 256
-_TOOL_FUNCTION_CATALOG = [
-    {"path": "tools.file_path_tool.create_directory", "description": "创建目录"},
-    {"path": "tools.file_path_tool.create_file", "description": "创建文件"},
-    {"path": "tools.file_path_tool.rename_path", "description": "重命名文件或目录"},
-    {"path": "tools.file_path_tool.move_path", "description": "移动文件或目录"},
-    {"path": "tools.file_operator_tool.read_file", "description": "读取文件内容"},
-    {"path": "tools.file_operator_tool.read_lines", "description": "按行读取文件"},
-    {"path": "tools.file_operator_tool.search_keyword", "description": "按关键字搜索文件"},
-    {"path": "tools.file_operator_tool.search_regex", "description": "按正则搜索文件"},
-    {"path": "tools.file_operator_tool.get_file_stats", "description": "获取文件信息"},
-    {"path": "tools.file_operator_tool.create_file", "description": "创建文件并写入内容"},
-    {"path": "tools.file_operator_tool.write_file", "description": "覆盖写入文件"},
-    {"path": "tools.file_operator_tool.append_file", "description": "追加写入文件"},
-    {"path": "tools.file_operator_tool.replace_file_text", "description": "替换文件文本"},
-    {"path": "tools.create_tool.create_tool", "description": "创建工具脚手架"},
-    {"path": "tools.cursor_cli_tool.create_cursor_cli_session", "description": "创建 Cursor CLI 会话"},
-    {"path": "tools.cursor_cli_tool.call_cursor_agent", "description": "调用 Cursor Agent 执行编程任务"},
-    {"path": "tools.cursor_cli_tool.call_cursor_with_prompt", "description": "按 prompt 调用 Cursor CLI"},
-    {"path": "tools.cursor_cli_tool.call_cursor", "description": "按参数调用 Cursor CLI 命令"},
-]
+_README_API_HEADING_RE = re.compile(r"^###\s*`([A-Za-z_][A-Za-z0-9_]*)\s*\((.*?)\).*`")
 
 
 def _normalize_search_mode(search_mode: str) -> str:
@@ -712,33 +694,167 @@ class CapabilitySearchEngine:
 
     @staticmethod
     def _build_tool_function_entries() -> List[Dict[str, Any]]:
-        existing_toolsets = {str(item.get("name") or "").strip() for item in list_toolsets(keyword="", selected_os="all")}
-        if not existing_toolsets:
+        toolsets = list_toolsets(keyword="", selected_os="all")
+        if not isinstance(toolsets, list) or not toolsets:
             return []
         entries: List[Dict[str, Any]] = []
-        for item in _TOOL_FUNCTION_CATALOG:
-            function_path = str(item.get("path") or "").strip()
-            if not function_path.startswith("tools."):
+        for toolset in toolsets:
+            module_name = str(toolset.get("name") or "").strip()
+            if not module_name:
                 continue
-            parts = [part.strip() for part in function_path.split(".") if part.strip()]
-            if len(parts) < 3:
+            toolset_path = CapabilitySearchEngine._resolve_toolset_path(toolset)
+            if not toolset_path:
                 continue
-            module_name = parts[1]
-            if module_name not in existing_toolsets:
+            function_docs = CapabilitySearchEngine._discover_tool_function_docs(toolset_path=toolset_path)
+            if not function_docs:
                 continue
-            description = str(item.get("description") or "").strip()
-            search_text = " | ".join([function_path, module_name, description])
-            entries.append(
-                CapabilitySearchEngine._build_entry(
-                    kind="tool_function",
-                    name=function_path.split(".")[-1],
-                    path=function_path,
-                    module=module_name,
-                    description=description,
-                    search_text=search_text,
+            for function_name, description in function_docs.items():
+                normalized_name = str(function_name or "").strip()
+                if not normalized_name or normalized_name.startswith("_"):
+                    continue
+                function_path = f"tools.{module_name}.{normalized_name}"
+                search_text = " | ".join([function_path, module_name, str(description or "").strip()])
+                entries.append(
+                    CapabilitySearchEngine._build_entry(
+                        kind="tool_function",
+                        name=normalized_name,
+                        path=function_path,
+                        module=module_name,
+                        description=str(description or "").strip(),
+                        search_text=search_text,
+                    )
                 )
-            )
         return entries
+
+    @staticmethod
+    def _resolve_toolset_path(toolset: Dict[str, Any]) -> Optional[Path]:
+        directory = str(toolset.get("directory") or "").strip()
+        if directory:
+            base_root = Path(Project.get_projects_base_path())
+            candidate = Path(directory)
+            if not candidate.is_absolute():
+                candidate = base_root / directory
+            if candidate.exists() and candidate.is_dir():
+                return candidate
+        key = str(toolset.get("name") or "").strip()
+        if not key:
+            return None
+        fallback = Path(Project.get_projects_base_path()) / "tools" / key
+        if fallback.exists() and fallback.is_dir():
+            return fallback
+        return None
+
+    @staticmethod
+    def _discover_tool_function_docs(toolset_path: Path) -> Dict[str, str]:
+        readme_map = CapabilitySearchEngine._extract_tool_functions_from_readme(readme_path=toolset_path / "README.md")
+        code_map = CapabilitySearchEngine._extract_tool_functions_from_python(toolset_path=toolset_path)
+        merged: Dict[str, str] = {}
+        for name, description in readme_map.items():
+            normalized_name = str(name or "").strip()
+            if not normalized_name:
+                continue
+            merged[normalized_name] = str(description or "").strip() or f"工具函数：{normalized_name}"
+        for name, description in code_map.items():
+            normalized_name = str(name or "").strip()
+            if not normalized_name or normalized_name in merged:
+                continue
+            merged[normalized_name] = str(description or "").strip() or f"工具函数：{normalized_name}"
+        return merged
+
+    @staticmethod
+    def _extract_tool_functions_from_readme(readme_path: Path) -> Dict[str, str]:
+        if not readme_path.exists() or not readme_path.is_file():
+            return {}
+        try:
+            lines = readme_path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            return {}
+        result: Dict[str, str] = {}
+        index = 0
+        while index < len(lines):
+            current_line = str(lines[index] or "").strip()
+            matched = _README_API_HEADING_RE.match(current_line)
+            if not matched:
+                index += 1
+                continue
+            func_name = str(matched.group(1) or "").strip()
+            signature = str(matched.group(2) or "").strip()
+            description = ""
+            cursor = index + 1
+            while cursor < len(lines):
+                body_line = str(lines[cursor] or "").strip()
+                if body_line.startswith("### "):
+                    break
+                if (
+                    body_line
+                    and not body_line.startswith("```")
+                    and not body_line.startswith("|")
+                    and not body_line.startswith("返回")
+                ):
+                    description = body_line
+                    break
+                cursor += 1
+            if not description:
+                description = f"API: {func_name}({signature})" if signature else f"API: {func_name}"
+            if func_name and func_name not in result:
+                result[func_name] = description
+            index = max(index + 1, cursor)
+        return result
+
+    @staticmethod
+    def _extract_tool_functions_from_python(toolset_path: Path) -> Dict[str, str]:
+        result: Dict[str, str] = {}
+        toolset_key = str(toolset_path.name or "").strip()
+        primary_tool_class_name = CapabilitySearchEngine._build_primary_tool_class_name(toolset_key=toolset_key)
+        python_files = sorted(toolset_path.glob("*.py"))
+        for file_path in python_files:
+            if file_path.name == "demo.py":
+                continue
+            try:
+                source = file_path.read_text(encoding="utf-8")
+                tree = ast.parse(source)
+            except Exception:
+                continue
+
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    func_name = str(node.name or "").strip()
+                    if not func_name or func_name.startswith("_"):
+                        continue
+                    if func_name in result:
+                        continue
+                    doc_lines = str(ast.get_docstring(node) or "").strip().splitlines()
+                    result[func_name] = doc_lines[0].strip() if doc_lines else f"函数：{func_name}"
+                    continue
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                class_name = str(node.name or "").strip()
+                if not class_name.endswith("Tool"):
+                    continue
+                if primary_tool_class_name and class_name != primary_tool_class_name:
+                    # 仅收集工具主类，避免把内部对象类方法暴露为可调度 API。
+                    continue
+                for member in node.body:
+                    if not isinstance(member, ast.FunctionDef):
+                        continue
+                    method_name = str(member.name or "").strip()
+                    if not method_name or method_name.startswith("_") or method_name == "__init__":
+                        continue
+                    if method_name in result:
+                        continue
+                    doc_lines = str(ast.get_docstring(member) or "").strip().splitlines()
+                    result[method_name] = doc_lines[0].strip() if doc_lines else f"方法：{class_name}.{method_name}"
+        return result
+
+    @staticmethod
+    def _build_primary_tool_class_name(toolset_key: str) -> str:
+        normalized = str(toolset_key or "").strip().lower()
+        if not normalized:
+            return ""
+        parts = [part.strip() for part in normalized.split("_") if part.strip()]
+        if not parts:
+            return ""
+        return "".join(part.capitalize() for part in parts)
 
     @staticmethod
     def _build_entry(
@@ -810,6 +926,28 @@ def search_tool_functions(
         allowed_toolsets=allowed_toolset_set,
         top_k=top_k,
     )
+
+
+def list_tool_function_entries(
+    allowed_toolsets: List[str],
+    top_k: int = 256,
+) -> List[Dict[str, Any]]:
+    allowed_toolset_set = {str(item or "").strip() for item in (allowed_toolsets or []) if str(item or "").strip()}
+    if not allowed_toolset_set:
+        return []
+    payload = _ENGINE._get_index_payload()
+    entries = payload.get("entries", []) if isinstance(payload, dict) else []
+    result: List[Dict[str, Any]] = []
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("kind") or "").strip() != "tool_function":
+            continue
+        if str(item.get("module") or "").strip() not in allowed_toolset_set:
+            continue
+        result.append(dict(item))
+    result.sort(key=lambda it: str(it.get("path") or ""))
+    return result[: max(1, int(top_k or 256))]
 
 
 def search_capabilities(

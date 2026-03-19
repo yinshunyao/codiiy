@@ -158,8 +158,8 @@ class MacosTerminalObject:
         }
 
 
-class MacosTerminalTool:
-    """macOS 终端对象工具（通过 ComponentCallTool 调用组件）。"""
+class TerminalObjectTool:
+    """终端对象工具：供内部工具复用对象化会话能力。"""
 
     def __init__(self, auto_install: Optional[bool] = None):
         self._component_tool = ComponentCallTool(auto_install=auto_install)
@@ -292,6 +292,31 @@ class MacosTerminalTool:
             return self._objects.get(normalized_object_id)
 
 
+class MacosTerminalTool:
+    """macOS 终端黑盒工具：单函数命令执行入口。"""
+
+    def __init__(
+        self,
+        auto_install: Optional[bool] = None,
+        terminal_object_tool: Optional[TerminalObjectTool] = None,
+    ):
+        self._terminal_object_tool = terminal_object_tool or TerminalObjectTool(auto_install=auto_install)
+
+    def run_command(
+        self,
+        command: str,
+        cwd: str = "",
+        shell_mode: str = "zsh",
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        return self._terminal_object_tool.run_command(
+            command=command,
+            cwd=cwd,
+            shell_mode=shell_mode,
+            timeout_seconds=timeout_seconds,
+        )
+
+
 def _call_component(
     component_tool: ComponentCallTool,
     function_path: str,
@@ -308,4 +333,3 @@ def _call_component(
     return {"success": True, "data": component_result}
 
 
-TerminalObjectTool = MacosTerminalTool

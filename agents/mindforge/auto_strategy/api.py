@@ -110,12 +110,39 @@ class AutoMindforgeStrategy(MindforgeStrategy):
 
         tool_caps = self._summarize_tools(tools=tools)
         has_tools = bool(tool_caps.get("has_tools"))
+        preheat_decision, preheat_error = self._analyze_preheat_by_model(
+            query_text=query_text,
+            tool_caps=tool_caps,
+            config=config,
+            system_prompt=system_prompt,
+            tools=tools,
+        )
+        route_steps: List[ReActStepRecord] = [
+            ReActStepRecord(
+                step=1,
+                thought="[auto preheat] assess_task",
+                observation=(
+                    f"is_completed={bool(preheat_decision.get('is_completed'))}; "
+                    f"next_strategy={str(preheat_decision.get('next_strategy') or '')}; "
+                    f"reason={str(preheat_decision.get('reason') or '')}; "
+                    f"confidence={preheat_decision.get('confidence')}; "
+                    f"error={preheat_error or ''}"
+                ),
+            )
+        ]
+        if bool(preheat_decision.get("is_completed")):
+            preheat_answer = str(preheat_decision.get("answer") or "").strip()
+            if preheat_answer:
+                return ReActRunResult(success=True, final_answer=preheat_answer, steps=route_steps)
+
         route_decision = self._choose_route(
             query_text=query_text,
             tool_caps=tool_caps,
             config=config,
             system_prompt=system_prompt,
             tools=tools,
+            preheat_decision=preheat_decision,
+            preheat_error=preheat_error,
         )
         route = str(route_decision.get("route") or "react")
         route_reason = str(route_decision.get("reason") or "")
@@ -123,9 +150,9 @@ class AutoMindforgeStrategy(MindforgeStrategy):
         must_execute = bool(route_decision.get("must_execute"))
         route_intent = str(route_decision.get("intent_type") or "unknown")
         route_confidence = route_decision.get("confidence")
-        route_steps: List[ReActStepRecord] = [
+        route_steps.append(
             ReActStepRecord(
-                step=1,
+                step=len(route_steps) + 1,
                 thought="[auto route] choose_strategy",
                 observation=(
                     f"selected={route}; reason={route_reason}; source={route_source}; "
@@ -134,7 +161,7 @@ class AutoMindforgeStrategy(MindforgeStrategy):
                     f"tool_caps={self._compact_tool_caps_text(tool_caps)}"
                 ),
             )
-        ]
+        )
         staged = self._build_stage_chain(route=route, has_tools=has_tools, must_execute=must_execute)
 
         all_steps: List[ReActStepRecord] = list(route_steps)
@@ -177,6 +204,7 @@ class AutoMindforgeStrategy(MindforgeStrategy):
                     attempt=attempt,
                     total_attempts=stage_attempts,
                     previous_error=stage_error,
+                    tools=tools,
                 )
                 stage_result = self._run_single(
                     stage_name=stage_name,
@@ -336,6 +364,8 @@ class AutoMindforgeStrategy(MindforgeStrategy):
         config: ReActEngineConfig,
         system_prompt: str,
         tools: List[ReActTool],
+        preheat_decision: Dict[str, Any],
+        preheat_error: str,
     ) -> Dict[str, Any]:
         has_tools = bool(tool_caps.get("has_tools"))
         if not has_tools:
@@ -347,6 +377,21 @@ class AutoMindforgeStrategy(MindforgeStrategy):
                 "intent_type": "qa",
                 "confidence": None,
             }
+        preheat_route_decision, preheat_route_error = self._build_route_from_preheat(
+            preheat_decision=preheat_decision,
+            query_text=query_text,
+            tool_caps=tool_caps,
+        )
+        if preheat_route_decision:
+            if preheat_error:
+                preheat_route_decision["reason"] = (
+                    f"{preheat_route_decision.get('reason', '')}; preheat_error={preheat_error}"
+                ).strip("; ")
+            if preheat_route_error:
+                preheat_route_decision["reason"] = (
+                    f"{preheat_route_decision.get('reason', '')}; preheat_guardrail={preheat_route_error}"
+                ).strip("; ")
+            return preheat_route_decision
 
         model_decision, model_error = self._analyze_route_by_model(
             query_text=query_text,
@@ -375,6 +420,8 @@ class AutoMindforgeStrategy(MindforgeStrategy):
             fallback_reason = f"{fallback_reason}; model_error={model_error}"
         if normalize_error:
             fallback_reason = f"{fallback_reason}; model_guardrail={normalize_error}"
+        if preheat_error:
+            fallback_reason = f"{fallback_reason}; preheat_error={preheat_error}"
         return {
             "route": route,
             "reason": fallback_reason,
@@ -383,6 +430,245 @@ class AutoMindforgeStrategy(MindforgeStrategy):
             "intent_type": "unknown",
             "confidence": None,
         }
+
+    def _build_route_from_preheat(
+        self,
+        preheat_decision: Dict[str, Any],
+        query_text: str,
+        tool_caps: Dict[str, object],
+    ) -> Tuple[Dict[str, Any], str]:
+        if not isinstance(preheat_decision, dict) or not preheat_decision:
+            return {}, "preheat 未返回可用路由建议"
+        next_strategy = str(preheat_decision.get("next_strategy") or "").strip().lower()
+        if not next_strategy:
+            return {}, "preheat 未指定 next_strategy"
+        model_decision = {
+            "preferred_strategy": next_strategy,
+            "must_execute": bool(preheat_decision.get("must_execute")),
+            "intent_type": str(preheat_decision.get("intent_type") or "unknown"),
+            "confidence": preheat_decision.get("confidence"),
+            "reason": str(preheat_decision.get("reason") or "").strip() or "采用预热建议策略",
+        }
+        normalized, normalize_error = self._normalize_model_route_decision(
+            model_decision=model_decision,
+            query_text=query_text,
+            tool_caps=tool_caps,
+        )
+        if not normalized:
+            return {}, normalize_error
+        normalized["source"] = "preheat_guardrail" if normalize_error else "preheat"
+        return normalized, normalize_error
+
+    def _analyze_preheat_by_model(
+        self,
+        query_text: str,
+        tool_caps: Dict[str, object],
+        config: ReActEngineConfig,
+        system_prompt: str,
+        tools: List[ReActTool],
+    ) -> Tuple[Dict[str, Any], str]:
+        self._raise_if_stop_requested(config)
+        messages = self._build_preheat_messages(
+            query_text=query_text,
+            tool_caps=tool_caps,
+            system_prompt=system_prompt,
+            tools=tools,
+        )
+        kwargs: Dict[str, Any] = {
+            "model": config.model,
+            "messages": messages,
+            "config_name": config.config_name,
+            "temperature": self._ROUTE_MODEL_TEMPERATURE,
+            "max_tokens": min(int(config.max_tokens or self._ROUTE_MODEL_MAX_TOKENS), self._ROUTE_MODEL_MAX_TOKENS),
+        }
+        if config.api_key:
+            kwargs["api_key"] = config.api_key
+        self._emit_trace_event(
+            config=config,
+            kind="llm_call",
+            title="Auto 预热判定调用开始",
+            status="running",
+            input_data={"model": config.model, "message_count": len(messages)},
+        )
+        try:
+            call_result = self.component_tool.chat_completion(kwargs=kwargs)
+        except Exception as exc:
+            self._emit_trace_event(
+                config=config,
+                kind="llm_call",
+                title="Auto 预热判定调用结束",
+                status="failed",
+                input_data={"model": config.model},
+                error=str(exc),
+            )
+            return {}, f"调用 capability_dispatcher.chat_completion 失败: {exc}"
+        if not isinstance(call_result, dict) or not bool(call_result.get("success")):
+            call_error = str(call_result.get("error", "调用 component_tool 失败"))
+            self._emit_trace_event(
+                config=config,
+                kind="llm_call",
+                title="Auto 预热判定调用结束",
+                status="failed",
+                input_data={"model": config.model},
+                error=call_error,
+            )
+            return {}, call_error
+        call_data = call_result.get("data", {})
+        result = call_data.get("result") if isinstance(call_data, dict) else None
+        token_usage = self._extract_token_usage_from_payload(call_result)
+        if not isinstance(result, dict):
+            self._emit_trace_event(
+                config=config,
+                kind="llm_call",
+                title="Auto 预热判定调用结束",
+                status="failed",
+                input_data={"model": config.model},
+                error="模型返回格式错误，期望 dict",
+            )
+            return {}, "模型返回格式错误，期望 dict"
+        if not bool(result.get("success")):
+            call_error = str(result.get("error", "模型调用失败"))
+            self._emit_trace_event(
+                config=config,
+                kind="llm_call",
+                title="Auto 预热判定调用结束",
+                status="failed",
+                input_data={"model": config.model},
+                error=call_error,
+            )
+            return {}, call_error
+        text = extract_text_from_model_output(result.get("data"))
+        parsed, parse_error = parse_model_json(text)
+        if parse_error:
+            self._emit_trace_event(
+                config=config,
+                kind="llm_call",
+                title="Auto 预热判定调用结束",
+                status="failed",
+                input_data={"model": config.model},
+                error=parse_error,
+            )
+            return {}, parse_error
+        normalized, normalize_error = self._normalize_preheat_decision(
+            decision=parsed,
+            tool_caps=tool_caps,
+        )
+        if normalize_error:
+            self._emit_trace_event(
+                config=config,
+                kind="llm_call",
+                title="Auto 预热判定调用结束",
+                status="failed",
+                input_data={"model": config.model},
+                error=normalize_error,
+                token_usage=token_usage,
+            )
+            return {}, normalize_error
+        self._emit_trace_event(
+            config=config,
+            kind="llm_call",
+            title="Auto 预热判定调用结束",
+            status="success",
+            input_data={"model": config.model},
+            output_data={"preheat_decision": normalized},
+            token_usage=token_usage,
+        )
+        return normalized, ""
+
+    @staticmethod
+    def _build_preheat_messages(
+        query_text: str,
+        tool_caps: Dict[str, object],
+        system_prompt: str,
+        tools: List[ReActTool],
+    ) -> List[Dict[str, Any]]:
+        tool_briefs: List[Dict[str, str]] = []
+        for item in tools:
+            tool_briefs.append(
+                {
+                    "name": str(getattr(item, "name", "") or ""),
+                    "path": str(getattr(item, "function_path", "") or ""),
+                    "description": str(getattr(item, "description", "") or ""),
+                    "api_call": '{"tool":"<name>","kwargs":{...}}',
+                }
+            )
+        preheat_protocol = (
+            "你是 auto 模式预热判定器。请先尝试基于任务和工具能力判断："
+            "是否可以直接给出最终答案，还是必须进入下一步执行。\n"
+            "必须只输出一个 JSON 对象，不要输出 markdown 或解释。\n"
+            "输出格式："
+            '{"is_completed":true|false,'
+            '"answer":"当 is_completed=true 时填写最终答复，否则空字符串",'
+            '"next_strategy":"cot|react|plan_execute|reflexion|unknown",'
+            '"intent_type":"qa|action|workflow|repair|unknown",'
+            '"must_execute":true|false,'
+            '"confidence":0.0,'
+            '"reason":"简要原因"}\n'
+            "约束：若 is_completed=false，answer 必须为空。"
+        )
+        if str(system_prompt or "").strip():
+            preheat_protocol = f"{system_prompt.strip()}\n\n{preheat_protocol}"
+        user_content = (
+            f"用户任务：{query_text}\n\n"
+            f"工具能力摘要：{json.dumps(tool_caps, ensure_ascii=False)}\n\n"
+            f"可用工具（完整列表）：{json.dumps(tool_briefs, ensure_ascii=False)}\n\n"
+            "请输出预热判定 JSON。"
+        )
+        return [
+            {"role": "system", "content": preheat_protocol},
+            {"role": "user", "content": user_content},
+        ]
+
+    @staticmethod
+    def _normalize_preheat_decision(decision: Dict[str, Any], tool_caps: Dict[str, object]) -> Tuple[Dict[str, Any], str]:
+        if not isinstance(decision, dict) or not decision:
+            return {}, "预热判定未返回有效 JSON"
+        raw_completed = decision.get("is_completed")
+        if isinstance(raw_completed, bool):
+            is_completed = raw_completed
+        else:
+            normalized_completed = str(raw_completed or "").strip().lower()
+            if normalized_completed in {"true", "yes", "1", "完成", "已完成"}:
+                is_completed = True
+            elif normalized_completed in {"false", "no", "0", "未完成", "继续"}:
+                is_completed = False
+            else:
+                return {}, "预热判定缺少 is_completed 布尔值"
+        answer = str(decision.get("answer") or "").strip()
+        next_strategy = str(decision.get("next_strategy") or "").strip().lower()
+        intent_type = str(decision.get("intent_type") or "unknown").strip().lower() or "unknown"
+        reason = str(decision.get("reason") or "").strip()
+        must_execute_raw = decision.get("must_execute")
+        if isinstance(must_execute_raw, bool):
+            must_execute = must_execute_raw
+        else:
+            must_execute = intent_type in {"action", "workflow", "repair"}
+        confidence = decision.get("confidence")
+        if not isinstance(confidence, (int, float)):
+            confidence = None
+        else:
+            confidence = max(0.0, min(1.0, float(confidence)))
+        if is_completed and not answer:
+            return {}, "预热判定为完成时必须提供 answer"
+        if not is_completed:
+            answer = ""
+        if next_strategy == "plan_reflexion":
+            next_strategy = "plan_execute"
+        allowed = {"cot", "react", "plan_execute", "reflexion", "unknown", ""}
+        if next_strategy not in allowed:
+            next_strategy = ""
+        if not next_strategy and not is_completed:
+            has_executable_chain = bool(tool_caps.get("has_executable_chain"))
+            next_strategy = "react" if has_executable_chain else "cot"
+        return {
+            "is_completed": is_completed,
+            "answer": answer,
+            "next_strategy": next_strategy,
+            "intent_type": intent_type,
+            "must_execute": must_execute,
+            "confidence": confidence,
+            "reason": reason,
+        }, ""
 
     @staticmethod
     def _choose_route_by_rules(query_text: str, tool_caps: Dict[str, object]) -> Tuple[str, str]:
@@ -894,19 +1180,47 @@ class AutoMindforgeStrategy(MindforgeStrategy):
         attempt: int,
         total_attempts: int,
         previous_error: str,
+        tools: List[ReActTool],
     ) -> str:
         if total_attempts <= 1:
+            execution_hint = AutoMindforgeStrategy._build_stage_execution_hint(stage_name=stage_name, tools=tools)
+            if execution_hint and str(base_prompt or "").strip():
+                return f"{base_prompt.strip()}\n\n{execution_hint}"
+            if execution_hint:
+                return execution_hint
             return base_prompt
         hint = (
             f"当前为 auto.{stage_name} 的第 {attempt}/{total_attempts} 次尝试。\n"
             "若上一轮失败，请更换思路或工具组合，不要重复同一失败路径。"
         )
+        execution_hint = AutoMindforgeStrategy._build_stage_execution_hint(stage_name=stage_name, tools=tools)
+        if execution_hint:
+            hint = f"{hint}\n{execution_hint}"
         error_text = str(previous_error or "").strip()
         if error_text:
             hint = f"{hint}\n上一轮失败原因：{error_text}"
         if str(base_prompt or "").strip():
             return f"{base_prompt.strip()}\n\n{hint}"
         return hint
+
+    @staticmethod
+    def _build_stage_execution_hint(stage_name: str, tools: List[ReActTool]) -> str:
+        stage = str(stage_name or "").strip().lower()
+        if stage not in {"react", "plan_execute"}:
+            return ""
+        tool_lines: List[str] = []
+        for item in tools:
+            tool_lines.append(
+                f"- {str(getattr(item, 'name', '') or '')}: {str(getattr(item, 'description', '') or '')} "
+                f"(path={str(getattr(item, 'function_path', '') or '')})"
+            )
+        tool_text = "\n".join(tool_lines) if tool_lines else "- 无可用工具"
+        return (
+            "执行约束：优先基于下列工具进行详细执行规划，不要随机遍历所有工具。\n"
+            "工具调用格式固定为 JSON action：{\"tool\":\"工具名\",\"kwargs\":{...}}；"
+            "命令行任务若需要多条命令，应按先后顺序拆分并逐条执行。\n"
+            f"当前工具清单：\n{tool_text}"
+        )
 
     @staticmethod
     def _build_strategy(stage_name: str):

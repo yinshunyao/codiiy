@@ -874,6 +874,58 @@ class OrchestrationTestCase(unittest.TestCase):
         self.assertEqual(result.get("final_answer"), "当前磁盘可用空间为 128GiB")
         self.assertTrue(mock_mindforge_run.called)
 
+    @patch("collector.orchestration.coordinator.analyzer.chat")
+    @patch.object(MindforgeRunner, "run")
+    def test_coordinator_should_replan_when_need_replan_true_even_without_alternative(
+        self,
+        mock_mindforge_run,
+        mock_chat,
+    ):
+        mock_chat.side_effect = [
+            {
+                "success": True,
+                "response": "当前仍未执行关键命令，任务未完成。",
+                "error": "",
+            },
+            {
+                "success": True,
+                "response": '{"need_replan":true,"has_alternative":false,"reason":"缺少关键执行步骤","alternative_plan":""}',
+                "error": "",
+            },
+        ]
+        mock_mindforge_run.return_value = ("success", {"final_answer": "已补齐执行并完成任务"})
+        plan = ExecutionPlan.new_plan(goal="need_replan=true 强制重规划")
+        plan.steps = [
+            PlanStep(
+                step_id="step_summarize",
+                step_type="summarize",
+                target="answer_synthesizer",
+                input={"query": "查看当前磁盘剩余空间"},
+                depends_on=[],
+            )
+        ]
+        coordinator = Coordinator()
+        result = coordinator.run_plan(
+            plan=plan,
+            runtime_context={
+                "user_query": "查看当前磁盘剩余空间",
+                "model_id": "qwen-plus",
+                "allowed_agent_modules": ["mindforge"],
+                "allowed_control_modules": ["handle"],
+                "allowed_control_components": [],
+                "allowed_control_functions": [],
+                "allowed_toolsets": [],
+            },
+        ).to_dict()
+        by_step = {item.get("step_id"): item for item in result.get("step_results", [])}
+        self.assertIn("step_summarize_replan_mindforge", by_step)
+        self.assertEqual(by_step["step_summarize_replan_mindforge"]["status"], "success")
+        self.assertEqual(result.get("final_answer"), "已补齐执行并完成任务")
+        summarize_output = by_step["step_summarize"]["output"] or {}
+        completion_signal = summarize_output.get("completion_signal") or {}
+        self.assertTrue(bool(completion_signal.get("need_replan")))
+        self.assertFalse(bool(completion_signal.get("has_alternative")))
+
     @patch("collector.orchestration.coordinator.Coordinator._analyze_summarize_replan_signal")
     @patch("collector.orchestration.coordinator.analyzer.chat")
     def test_coordinator_should_skip_completion_signal_when_disabled(self, mock_chat, mock_signal):
@@ -1065,6 +1117,164 @@ class OrchestrationTestCase(unittest.TestCase):
         )
         self.assertGreaterEqual(int(config.max_steps), 7)
         self.assertGreaterEqual(int(config.max_tokens), 1200)
+
+    def test_mindforge_runner_should_allocate_more_budget_for_complex_query(self):
+        simple_config = MindforgeRunner._build_engine_config(
+            query="查看时间",
+            model_id="qwen-plus",
+            strategy_name="auto",
+            tool_count=2,
+        )
+        complex_config = MindforgeRunner._build_engine_config(
+            query="请先读取目录结构，再筛选异常文件，随后执行修复命令并校验结果，最后输出失败原因和下一步",
+            model_id="qwen-plus",
+            strategy_name="plan_execute",
+            tool_count=20,
+        )
+        self.assertGreater(int(complex_config.max_steps), int(simple_config.max_steps))
+        self.assertGreater(int(complex_config.max_tokens), int(simple_config.max_tokens))
+        self.assertLessEqual(int(complex_config.max_steps), 14)
+        self.assertLessEqual(int(complex_config.max_tokens), 2400)
+
+    def test_coordinator_should_respect_runtime_tool_max_attempts(self):
+        coordinator = Coordinator()
+        plan = ExecutionPlan.new_plan(goal="工具尝试次数受配置限制")
+        plan.steps = [
+            PlanStep(
+                step_id="step_tool_component",
+                step_type="tool",
+                target="tools.file_operator_tool.read_file",
+                input={
+                    "query": "读取配置文件",
+                    "fallback_targets": [
+                        "tools.file_operator_tool.write_file",
+                        "tools.file_path_tool.create_file",
+                    ],
+                },
+                depends_on=[],
+            )
+        ]
+        with patch.object(
+            ToolRunner,
+            "run",
+            side_effect=[
+                ("failed", {"error": "timeout"}),
+                ("failed", {"error": "network temporary issue"}),
+                ("success", {"result": {"ok": True}}),
+            ],
+        ) as mock_tool_run:
+            result = coordinator.run_plan(
+                plan=plan,
+                runtime_context={
+                    "user_query": "读取配置文件",
+                    "model_id": "qwen-plus",
+                    "allowed_agent_modules": [],
+                    "allowed_control_modules": [],
+                    "allowed_control_components": [],
+                    "allowed_control_functions": [],
+                    "allowed_toolsets": ["file_operator_tool", "file_path_tool"],
+                    "tool_max_attempts": 2,
+                },
+            ).to_dict()
+        by_step = {item.get("step_id"): item for item in result.get("step_results", [])}
+        output = by_step["step_tool_component"].get("output") or {}
+        self.assertEqual(by_step["step_tool_component"].get("status"), "failed")
+        self.assertEqual(int(output.get("attempt_count") or 0), 2)
+        self.assertEqual(mock_tool_run.call_count, 2)
+
+    def test_coordinator_should_stop_retry_on_parameter_contract_error(self):
+        coordinator = Coordinator()
+        plan = ExecutionPlan.new_plan(goal="参数契约硬失败立即停止")
+        plan.steps = [
+            PlanStep(
+                step_id="step_tool_component",
+                step_type="tool",
+                target="tools.file_path_tool.create_directory",
+                input={
+                    "query": "创建目录",
+                    "fallback_targets": [
+                        "tools.file_path_tool.create_file",
+                        "tools.file_operator_tool.write_file",
+                    ],
+                },
+                depends_on=[],
+            )
+        ]
+        with patch.object(
+            ToolRunner,
+            "run",
+            return_value=("failed", {"error": "missing required positional argument: 'dir_path'"}),
+        ) as mock_tool_run:
+            result = coordinator.run_plan(
+                plan=plan,
+                runtime_context={
+                    "user_query": "创建目录",
+                    "model_id": "qwen-plus",
+                    "allowed_agent_modules": [],
+                    "allowed_control_modules": [],
+                    "allowed_control_components": [],
+                    "allowed_control_functions": [],
+                    "allowed_toolsets": ["file_path_tool", "file_operator_tool"],
+                },
+            ).to_dict()
+        by_step = {item.get("step_id"): item for item in result.get("step_results", [])}
+        output = by_step["step_tool_component"].get("output") or {}
+        self.assertEqual(by_step["step_tool_component"].get("status"), "failed")
+        self.assertEqual(int(output.get("attempt_count") or 0), 1)
+        self.assertFalse(bool(output.get("fallback_used")))
+        self.assertEqual(mock_tool_run.call_count, 1)
+
+    def test_capability_search_should_discover_tool_functions_from_readme(self):
+        project_base = Path(capability_search.Project.get_projects_base_path())
+        toolset_path = project_base / "tools" / "macos_terminal_tool"
+        docs = capability_search.CapabilitySearchEngine._extract_tool_functions_from_readme(
+            readme_path=toolset_path / "README.md"
+        )
+        self.assertIn("run_command", docs)
+        self.assertTrue(bool(str(docs.get("run_command") or "").strip()))
+
+    def test_capability_search_should_build_tool_function_entries_without_static_catalog(self):
+        entries = capability_search.CapabilitySearchEngine._build_tool_function_entries()
+        paths = {str(item.get("path") or "").strip() for item in entries if isinstance(item, dict)}
+        self.assertIn("tools.macos_terminal_tool.run_command", paths)
+        self.assertIn("tools.file_operator_tool.read_file", paths)
+        self.assertFalse(hasattr(capability_search, "_TOOL_FUNCTION_CATALOG"))
+
+    def test_capability_search_should_only_extract_primary_tool_class_methods(self):
+        project_base = Path(capability_search.Project.get_projects_base_path())
+        toolset_path = project_base / "tools" / "macos_terminal_tool"
+        docs = capability_search.CapabilitySearchEngine._extract_tool_functions_from_python(toolset_path=toolset_path)
+        self.assertIn("run_command", docs)
+        self.assertNotIn("create_terminal_object", docs)
+        self.assertNotIn("close_terminal_object", docs)
+
+    @patch("collector.orchestration.mindforge_runner.list_tool_function_entries")
+    @patch("collector.orchestration.mindforge_runner.search_tool_functions")
+    def test_mindforge_runner_should_include_allowed_toolset_functions_when_search_misses(
+        self,
+        mock_search_tool_functions,
+        mock_list_tool_function_entries,
+    ):
+        mock_search_tool_functions.return_value = ([], {"engine_used": "native"})
+        mock_list_tool_function_entries.return_value = [
+            {
+                "path": "tools.macos_terminal_tool.run_command",
+                "module": "macos_terminal_tool",
+                "description": "执行终端命令",
+            }
+        ]
+        runner = MindforgeRunner()
+        tools = runner._build_tools(
+            query="请诊断一下",
+            allowed_toolsets=["macos_terminal_tool"],
+            allowed_control_modules=[],
+            allowed_control_components=[],
+            allowed_control_functions=[],
+            capability_search_mode="hybrid",
+        )
+        self.assertEqual(len(tools), 1)
+        self.assertEqual(tools[0].function_path, "tools.macos_terminal_tool.run_command")
+        self.assertEqual(tools[0].name, "macos_terminal_tool_run_command")
 
 
 if __name__ == "__main__":

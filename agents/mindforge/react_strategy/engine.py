@@ -745,7 +745,10 @@ class ReActEngine:
         tool_lines = []
         for tool in self.tools:
             tool_lines.append(
-                f"- {tool.name}: path={tool.function_path}, description={tool.description or '无'}"
+                (
+                    f"- {tool.name}: path={tool.function_path}, description={tool.description or '无'}, "
+                    'api_call={"tool":"%s","kwargs":{...}}' % tool.name
+                )
             )
         scratchpad_text = "\n\n".join(scratchpad) if scratchpad else "（暂无历史步骤）"
 
@@ -757,6 +760,7 @@ class ReActEngine:
             "约束：\n"
             "- 一次最多调用一个工具；\n"
             "- 只能使用给定工具名；\n"
+            "- 工具调用必须使用 action JSON，且 kwargs 仅包含必要参数；\n"
             "- 完成时禁止复制 observation 原文，不要输出 final_answer；\n"
             "- 不要输出 Markdown，不要输出额外解释。"
         )

@@ -84,6 +84,36 @@ class CollectorViewsTokenTraceTestCase(unittest.TestCase):
             {"prompt_tokens": 6, "completion_tokens": 4, "total_tokens": 10},
         )
 
+    def test_build_tool_method_param_fields_should_extract_required_and_types(self):
+        def sample_method(
+            dir_path: str,
+            create_parent_dirs: bool = True,
+            retries: int = 1,
+            ratio: float = 0.5,
+            options: dict = None,
+        ):
+            return dir_path
+
+        fields = views._build_tool_method_param_fields(sample_method)
+        field_map = {item["name"]: item for item in fields}
+
+        self.assertTrue(field_map["dir_path"]["required"])
+        self.assertEqual(field_map["create_parent_dirs"]["value_type"], "bool")
+        self.assertEqual(field_map["retries"]["value_type"], "int")
+        self.assertEqual(field_map["ratio"]["value_type"], "float")
+        self.assertEqual(field_map["options"]["value_type"], "json")
+
+    def test_parse_demo_param_value_should_convert_bool_for_tool_test(self):
+        field = {
+            "name": "create_parent_dirs",
+            "required": False,
+            "value_type": "bool",
+        }
+        ok, parsed_value, error = views._parse_demo_param_value(field, "false")
+        self.assertTrue(ok)
+        self.assertFalse(parsed_value)
+        self.assertEqual(error, "")
+
 
 @override_settings(ALLOWED_HOSTS=["testserver", "localhost", "127.0.0.1"])
 class ProjectListViewTestCase(TestCase):
@@ -141,6 +171,7 @@ class CompactListLayoutViewTestCase(TestCase):
         self.assertContains(response, "toolset-item-header")
         self.assertContains(response, "toolset-meta-row")
         self.assertContains(response, "toolset-item-actions")
+        self.assertContains(response, "测试")
 
     def test_agent_item_list_should_render_compact_row_layout(self):
         module_name = next(iter(views.ALLOWED_AGENT_MODULES.keys()))
@@ -334,6 +365,28 @@ class MenuNamingSchemeViewTestCase(TestCase):
 
         session = self.client.session
         self.assertEqual(session.get("menu_naming_scheme"), "standard")
+
+
+@override_settings(ALLOWED_HOSTS=["testserver", "localhost", "127.0.0.1"])
+class ToolFunctionTestViewTestCase(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="tool-test-user",
+            password="pass-123456",
+        )
+        self.client.login(username="tool-test-user", password="pass-123456")
+        Project.objects.create(
+            name="core",
+            path=".",
+            created_by=self.user,
+            is_default=True,
+        )
+
+    def test_tool_function_test_page_should_render(self):
+        response = self.client.get(reverse("tool_function_test", args=["file_path_tool"]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "工具 API 测试")
+        self.assertContains(response, "file_path_tool")
 
 
 if __name__ == "__main__":

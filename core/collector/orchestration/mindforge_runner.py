@@ -6,7 +6,7 @@ from agents.mindforge.strategy_base import MindforgeStopRequested
 from agents.mindforge.strategy_factory import build_mindforge_strategy
 from framework import CapabilityDispatcher
 
-from .capability_search import search_tool_functions
+from .capability_search import list_tool_function_entries, search_tool_functions
 from .protocol import OrchestrationStoppedError, STEP_STATUS_FAILED, STEP_STATUS_SUCCESS
 
 logger = logging.getLogger(__name__)
@@ -229,8 +229,23 @@ class MindforgeRunner:
             search_engine="auto",
             top_k=64,
         )
+        # 检索命中结果用于排序；同时补齐白名单工具集的全量函数，避免命中不足导致“工具未注册”。
+        fallback_functions = list_tool_function_entries(
+            allowed_toolsets=list(allowed_toolset_set),
+            top_k=512,
+        )
+        merged_functions: List[Dict] = []
+        seen_function_paths: Set[str] = set()
+        for item in list(matched_functions or []) + list(fallback_functions or []):
+            if not isinstance(item, dict):
+                continue
+            function_path = str(item.get("path") or "").strip()
+            if not function_path or function_path in seen_function_paths:
+                continue
+            seen_function_paths.add(function_path)
+            merged_functions.append(item)
         function_candidates: List[Tuple[str, str, str, float, int]] = []
-        for index, item in enumerate(matched_functions):
+        for index, item in enumerate(merged_functions):
             function_path = str(item.get("path") or "").strip()
             if not function_path.startswith("tools."):
                 continue
@@ -238,7 +253,8 @@ class MindforgeRunner:
             if toolset_key not in allowed_toolset_set:
                 continue
             description = str(item.get("description") or "").strip() or f"工具函数：{function_path}"
-            score = float(item.get("score") or 0.0)
+            # 命中检索结果保留真实得分，白名单兜底函数赋低默认分用于靠后排序。
+            score = float(item.get("score") or 0.01)
             function_candidates.append((function_path, toolset_key, description, score, index))
         return self._build_tools_from_function_candidates(function_candidates=function_candidates)
 
@@ -290,26 +306,30 @@ class MindforgeRunner:
         strategy_key = str(strategy_name or "auto").strip().lower() or "auto"
         complexity = MindforgeRunner._estimate_query_complexity(normalized_query)
 
-        max_steps = 4
+        max_steps = 5
         if strategy_key == "plan_execute":
-            max_steps = 8
+            max_steps = 10
         elif strategy_key == "reflexion":
-            max_steps = 7
+            max_steps = 9
         elif strategy_key == "auto":
-            max_steps = 5
+            max_steps = 7
 
-        if complexity >= 4:
+        if complexity >= 3:
             max_steps += 2
-        if complexity >= 6:
-            max_steps += 1
+        if complexity >= 5:
+            max_steps += 2
         if int(tool_count or 0) >= 12:
             max_steps += 1
-        max_steps = min(max_steps, 10)
+        if int(tool_count or 0) >= 24:
+            max_steps += 1
+        max_steps = min(max_steps, 14)
 
-        max_tokens = 900 + (100 * max(0, complexity - 1))
+        max_tokens = 1000 + (180 * max(0, complexity - 1))
         if strategy_key in {"plan_execute", "reflexion"}:
-            max_tokens += 200
-        max_tokens = min(max_tokens, 1500)
+            max_tokens += 260
+        if int(tool_count or 0) >= 12:
+            max_tokens += 120
+        max_tokens = min(max_tokens, 2400)
 
         return ReActEngineConfig(
             model=str(model_id or "qwen-plus").strip() or "qwen-plus",

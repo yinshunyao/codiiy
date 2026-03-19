@@ -236,13 +236,15 @@ class PlanExecuteMindforgeStrategy(MindforgeStrategy):
                     "name": item.name,
                     "description": item.description,
                     "path": item.function_path,
+                    "api_call": {"tool": item.name, "kwargs": {}},
                 }
             )
         plan_protocol = (
             "你是 Plan-and-Execute 规划器。先将用户任务拆分为可执行子任务步骤。\n"
             "必须只输出 JSON 对象，格式：\n"
             "{\"plan\":[{\"task\":\"步骤1\"},{\"task\":\"步骤2\"}]}\n"
-            f"约束：步骤数 1~{max_items}，每步一句话，聚焦可执行动作，不要输出解释文本。"
+            f"约束：步骤数 1~{max_items}，每步一句话，聚焦可执行动作，不要输出解释文本。\n"
+            "若任务包含命令行操作，需要按执行顺序拆分多条命令步骤，避免把多条命令塞进同一步。"
         )
         if str(system_prompt or "").strip():
             plan_protocol = f"{system_prompt.strip()}\n\n{plan_protocol}"

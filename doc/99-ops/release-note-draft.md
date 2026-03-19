@@ -12,6 +12,26 @@
 
 ## 草稿条目（最新在前）
 
+### 2026-03-18
+- [问题修复] 修复 ReAct 工具调用结果为 `null`：执行器兼容 `data.result` 与直接 `data` 两种工具返回结构，`macos_terminal_tool.run_command` 结果可正确写入 observation。
+  - 关联：`agents/mindforge/react_strategy/executor.py`、`test/test_control/test_agents/test_react_engine.py`、`doc/91-qa/【自主规划】ReAct工具调用结果被写成null.md`
+- [问题修复] 修复 ReAct 工具名调用“已授权但未注册”问题：`mindforge_runner` 在检索未命中时仍补齐白名单工具函数注册，`macos_terminal_tool` 可稳定映射到 `tools.macos_terminal_tool.run_command` 执行。
+  - 关联：`core/collector/orchestration/mindforge_runner.py`、`core/collector/orchestration/capability_search.py`、`test/test_core/test_collector/test_orchestration/test_orchestration.py`、`doc/91-qa/【自主规划】ReAct工具名未映射到函数路径.md`
+- [变更功能] 工具函数索引改为动态发现：`capability_search` 从工具 `README.md` API 与代码反射自动生成 `tool_function` 条目，移除固定 `_TOOL_FUNCTION_CATALOG` 依赖；新增工具目录后可被前端查询与自主规划统一感知。
+  - 关联：`core/collector/orchestration/capability_search.py`、`test/test_core/test_collector/test_orchestration/test_orchestration.py`、`doc/01-or/复杂任务理解和处理的方案.md`、`doc/02-dr/01 会话原始需求收集系统设计.md`、`doc/03-tr/01 会话原始需求收集系统测试需求.md`
+- [问题修复] 自主规划总结阶段重规划门控修正：当 `completion_signal.need_replan=true` 时，无论 `has_alternative` 是否为 `false` 都会触发一次重规划执行，避免“未完成但提前结束”。
+  - 关联：`core/collector/orchestration/coordinator.py`、`test/test_core/test_collector/test_orchestration/test_orchestration.py`、`doc/91-qa/【自主规划】总结阶段未完成但未触发重规划.md`
+- [变更功能] `mindforge auto` 新增预热判定链路：先基于完整工具清单判断是否可直接回答；未完成时按预热建议策略继续执行，并增强 `react/plan_execute` 的工具 API 调用提示。
+  - 关联：`agents/mindforge/auto_strategy/api.py`、`agents/mindforge/react_strategy/engine.py`、`agents/mindforge/plan_execute_strategy/api.py`、`test/test_agents/test_mindforge_strategies.py`、`doc/01-or/复杂任务理解和处理的方案.md`、`doc/02-dr/01 会话原始需求收集系统设计.md`、`doc/03-tr/01 会话原始需求收集系统测试需求.md`
+- [变更功能] `macos_terminal_tool` 对外接口黑盒化：收敛为单函数 `run_command`（输入一条命令直接返回结果），对象化会话能力转为内部复用实现，降低大模型调用复杂度。
+  - 关联：`tools/macos_terminal_tool/macos_terminal_tool.py`、`tools/macos_terminal_tool/README.md`、`tools/cursor_cli_tool/cursor_cli_tool.py`、`doc/01-or/TOOLS/tool-macos终端对象工具.md`、`doc/03-tr/03 macOS终端工具黑盒化测试设计.md`
+- [新增功能] 工具集新增 Django 工具 API 测试页面：支持按工具方法动态渲染参数输入、异步执行测试、状态轮询与结构化结果展示。
+  - 关联：`core/collector/views.py`、`core/collector/urls.py`、`core/templates/collector/tool_function_test.html`、`core/templates/collector/toolset_list.html`、`core/collector/models.py`、`core/collector/migrations/0028_toolapitesttask.py`
+- [新增功能] 全量工具目录补齐 `demo.py` 自建测试样例，覆盖 `component_call_tool`、`file_path_tool`、`file_operator_tool`、`create_tool`、`macos_terminal_tool`、`cursor_cli_tool`。
+  - 关联：`tools/*/demo.py`、`test/test_tools/test_tool_demos/test_tool_demos.py`
+- [文档更新] 补充工具规范需求对应开发设计与测试设计，并归档 OR 当前工作项。
+  - 关联：`doc/02-dr/04 工具规范测试能力设计.md`、`doc/03-tr/02 工具规范测试能力测试设计.md`、`doc/01-or/TOOLS/工具规范.md`
+
 ### 2026-03-17
 - [新增功能] 新增 `cursor_local` 适配器，支持 Cursor CLI `stream-json` 解析、`--resume` 续跑失败自动重试、指令文件注入与环境 hello probe。
   - 关联：`adapter/cursor_local/`、`adapter/registry.py`、`test/test_adapter/test_cursor_local_adapter.py`、`doc/01-or/【适配器】Cursor Local 适配器实现.md`

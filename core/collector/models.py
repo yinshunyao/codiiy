@@ -999,3 +999,48 @@ class ControlApiTestTask(models.Model):
 
     def __str__(self):
         return f"{self.module_name} | {self.function_path} | {self.status}"
+
+
+class ToolApiTestTask(models.Model):
+    """工具 API 测试异步任务。"""
+
+    STATUS_PENDING = "pending"
+    STATUS_RUNNING = "running"
+    STATUS_SUCCESS = "success"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "等待中"),
+        (STATUS_RUNNING, "执行中"),
+        (STATUS_SUCCESS, "成功"),
+        (STATUS_FAILED, "失败"),
+    ]
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tool_api_test_tasks",
+        verbose_name="创建人",
+    )
+    toolset_key = models.CharField(max_length=120, verbose_name="工具集标识")
+    function_name = models.CharField(max_length=200, verbose_name="方法名")
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        verbose_name="状态",
+    )
+    call_kwargs_text = models.TextField(blank=True, verbose_name="调用入参（脱敏）")
+    call_result_text = models.TextField(blank=True, verbose_name="执行结果（脱敏）")
+    error_message = models.TextField(blank=True, verbose_name="错误信息")
+    started_at = models.DateTimeField(null=True, blank=True, verbose_name="开始时间")
+    finished_at = models.DateTimeField(null=True, blank=True, verbose_name="结束时间")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    class Meta:
+        verbose_name = "工具 API 测试任务"
+        verbose_name_plural = "工具 API 测试任务"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.toolset_key} | {self.function_name} | {self.status}"

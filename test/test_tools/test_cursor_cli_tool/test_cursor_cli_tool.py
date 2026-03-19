@@ -40,13 +40,13 @@ class _FakeMacosTerminalTool:
 
         if command.startswith("command -v"):
             if self.available:
-                output = "/usr/local/bin/cursor\n"
+                output = "/usr/local/bin/agent\n"
                 exit_code = 0
             else:
                 output = ""
                 exit_code = 1
-        elif command.startswith("cursor"):
-            output = "cursor ok\n"
+        elif command.startswith("agent"):
+            output = "agent ok\n"
             exit_code = 0
         else:
             output = "unknown command\n"
@@ -77,8 +77,8 @@ class CursorCliToolTestCase(unittest.TestCase):
 
         self.assertTrue(result.get("success"))
         data = result.get("data") or {}
-        self.assertEqual(data.get("cursor_binary"), "cursor")
-        self.assertEqual(data.get("binary_path"), "/usr/local/bin/cursor")
+        self.assertEqual(data.get("cursor_binary"), "agent")
+        self.assertEqual(data.get("binary_path"), "/usr/local/bin/agent")
         self.assertTrue(any(cmd.startswith("command -v") for cmd in fake_terminal.commands))
 
     def test_call_cursor_with_prompt_should_quote_and_run(self):
@@ -95,7 +95,7 @@ class CursorCliToolTestCase(unittest.TestCase):
 
         self.assertTrue(result.get("success"))
         executed = fake_terminal.commands[-1]
-        self.assertIn("cursor --format text --print", executed)
+        self.assertIn("agent --format text --print", executed)
         self.assertIn("hello", executed)
         self.assertIn("'\"'\"'world'\"'\"''", executed)
 
@@ -147,7 +147,7 @@ class CursorCliToolTestCase(unittest.TestCase):
 
         self.assertTrue(result.get("success"))
         executed = fake_terminal.commands[-1]
-        self.assertIn("cursor agent -p --output-format stream-json", executed)
+        self.assertIn("agent -p --output-format stream-json", executed)
         self.assertIn("--resume sess-prev", executed)
         self.assertIn("--model gpt-5.3-codex", executed)
         self.assertIn("--mode ask", executed)
@@ -171,7 +171,7 @@ class CursorCliToolTestCase(unittest.TestCase):
         self.assertTrue(bool(data.get("auto_created_session")))
         actual_object_id = str(data.get("actual_object_id") or "")
         self.assertTrue(actual_object_id.startswith("obj-"))
-        self.assertTrue(any(cmd.startswith("cursor agent -p") for cmd in fake_terminal.commands))
+        self.assertTrue(any(cmd.startswith("agent -p") for cmd in fake_terminal.commands))
         session_result = tool.get_cursor_session_id(object_id=actual_object_id)
         self.assertTrue(session_result.get("success"))
 
@@ -194,7 +194,7 @@ class CursorCliToolTestCase(unittest.TestCase):
 
         self.assertTrue(result.get("success"))
         executed = fake_terminal.commands[-1]
-        self.assertEqual(executed, "cursor --version")
+        self.assertEqual(executed, "agent --version")
 
 
 if __name__ == "__main__":

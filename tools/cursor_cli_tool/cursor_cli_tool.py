@@ -4,7 +4,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from tools.macos_terminal_tool import MacosTerminalTool
+from tools.macos_terminal_tool import TerminalObjectTool
 
 
 @dataclass
@@ -22,9 +22,9 @@ class CursorCliTool:
     def __init__(
         self,
         auto_install: Optional[bool] = None,
-        terminal_tool: Optional[MacosTerminalTool] = None,
+        terminal_tool: Optional[TerminalObjectTool] = None,
     ):
-        self._terminal_tool = terminal_tool or MacosTerminalTool(auto_install=auto_install)
+        self._terminal_tool = terminal_tool or TerminalObjectTool(auto_install=auto_install)
         self._sessions: Dict[str, _CursorCliSessionState] = {}
         self._session_aliases: Dict[str, str] = {}
         self._default_object_id: str = ""
@@ -34,7 +34,7 @@ class CursorCliTool:
         self,
         cwd: str = "",
         shell_mode: str = "zsh",
-        cursor_binary: str = "cursor",
+        cursor_binary: str = "agent",
         check_available: bool = True,
         check_timeout_seconds: float = 10.0,
     ) -> Dict[str, Any]:
@@ -187,7 +187,7 @@ class CursorCliTool:
         if not normalized_prompt:
             return {"success": False, "error": "prompt 不能为空"}
 
-        args: List[str] = ["agent", "-p"]
+        args: List[str] = ["-p"]
         normalized_output_format = str(output_format or "").strip() or "stream-json"
         args.extend(["--output-format", normalized_output_format])
 
